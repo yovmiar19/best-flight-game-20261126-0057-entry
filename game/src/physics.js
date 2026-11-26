@@ -29,6 +29,8 @@ export function freshState() {
     time: 0,
     crashed: false,
     landed: false,
+    lastLanding: null,
+    airTime: 0,
     message: '',
     messageUntil: 0,
   };
@@ -106,20 +108,40 @@ export function stepFlight(state, input, dt) {
     state.vy = Math.min(state.vy, 0);
   }
 
+  // Air time: only a real flight earns a landing bonus (stops taxi-bounce farming).
+  if (!state.onGround) state.airTime += dt;
+
   // Ground contact.
   const ground = groundHeightAt(state.pos.x, state.pos.z);
   if (state.pos.y <= ground + 1.6) {
     state.pos.y = ground + 1.6;
     if (state.onGround) {
-      if (state.speed >= TAKEOFF_SPEED) {
+      // Takeoff needs lift, not just speed: the pilot must pull up (ArrowUp).
+      // Rolling fast on the runway is taxiing, not flying — no takeoff, no bounce.
+      const liftVy = Math.sin(state.pitch) * state.speed * 0.92;
+      if (state.speed >= TAKEOFF_SPEED && liftVy > 0.5) {
         state.onGround = false;
+        state.vy = liftVy;
+        state.airTime = 0;
         event = 'takeoff';
       }
     } else {
-      // Touchdown: gentle + aligned + on the runway = landing; else damage or crash.
+      // Touchdown: grade it from vertical speed + alignment, then decide the outcome.
+      // BUTTER: vy >= -2.5 and level wings (+500) · FIRM: vy >= -4.5 (+200) · HARD: -1 hull.
+      // A hop under 2 s of air time is an aborted takeoff: it lands, but earns no bonus.
+      const realFlight = state.airTime > 2;
       const hard = state.vy < -6;
       const onStrip = overRunway(state.pos.x, state.pos.z) && Math.abs(state.roll) < 0.35;
       if (onStrip && !hard) {
+        const aligned = Math.abs(state.roll) < 0.15;
+        if (realFlight && state.vy >= -2.5 && aligned) {
+          state.lastLanding = { grade: 'BUTTER', bonus: 500 };
+        } else if (realFlight && state.vy >= -4.5) {
+          state.lastLanding = { grade: 'FIRM', bonus: 200 };
+        } else {
+          state.lastLanding = { grade: realFlight ? 'HARD' : 'FIRM', bonus: 0 };
+          if (realFlight) state.damage += 1;
+        }
         state.onGround = true;
         state.vy = 0;
         state.pitch = 0;
@@ -127,6 +149,7 @@ export function stepFlight(state, input, dt) {
         event = 'landed';
       } else if (ground > 0.5) {
         // Rough ground: hard landing damages, a fast hit crashes.
+        state.lastLanding = { grade: 'HARD', bonus: 0 };
         state.damage += state.speed > 30 || hard ? 2 : 1;
         state.onGround = true;
         state.speed *= 0.4;
@@ -134,6 +157,7 @@ export function stepFlight(state, input, dt) {
         event = state.damage >= 3 ? 'crash' : 'hard-landing';
       } else {
         // Water.
+        state.lastLanding = { grade: 'HARD', bonus: 0 };
         state.damage = 3;
         event = 'crash';
       }

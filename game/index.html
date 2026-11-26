@@ -29,7 +29,13 @@
   #hud-mission { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
     background: rgba(8, 24, 40, .55); border: 1px solid rgba(255,255,255,.25);
     border-radius: 20px; padding: 7px 18px; font-size: 14px; white-space: nowrap; }
-  #hud-warn { position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+  #hud-guide { position: absolute; top: 58px; left: 50%; transform: translateX(-50%);
+    background: rgba(8, 24, 40, .55); border: 1px solid rgba(255,179,0,.6);
+    border-radius: 20px; padding: 5px 16px; font-size: 14px; white-space: nowrap; }
+  #hud-arrow { display: inline-block; color: #ffb300; font-size: 16px; margin-right: 8px; }
+  #hud-minimap { position: absolute; right: 14px; bottom: 14px; width: 150px; height: 150px;
+    border: 1px solid rgba(255,255,255,.25); border-radius: 10px; }
+  #hud-warn { position: absolute; top: 100px; left: 50%; transform: translateX(-50%);
     color: #ff8a80; font-weight: bold; font-size: 16px; display: none;
     background: rgba(60,0,0,.5); border-radius: 8px; padding: 5px 14px; }
   #hud-banner { position: absolute; top: 34%; left: 50%; transform: translate(-50%, -50%) scale(.9);
@@ -41,6 +47,22 @@
   #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: linear-gradient(180deg, rgba(10,20,40,.55), rgba(10,20,40,.82)); z-index: 10; }
   #overlay.hidden { display: none; }
+  #overlay.crash-tint { background: linear-gradient(180deg, rgba(80,0,0,.55), rgba(60,0,0,.85)); }
+  .card.hidden { display: none; }
+  .card .big { font-size: 60px; margin: 0 0 4px; letter-spacing: .06em; color: #ffb300; }
+  .card .press { font-size: 20px; font-weight: bold; color: #4dd0e1; margin-top: 18px;
+    animation: blink 1.2s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  .card .stats { text-align: left; display: inline-block; font-size: 16px; line-height: 2;
+    background: rgba(255,255,255,.08); border-radius: 10px; padding: 12px 22px; margin: 12px 0 18px; }
+  .card .stats span { opacity: .75; font-size: 13px; margin-right: 14px; }
+  .card .stats b { font-size: 18px; }
+  .medal { font-size: 26px; font-weight: bold; margin: 4px 0 0; }
+  .medal.gold { color: #ffd54f; }
+  .medal.silver { color: #cfd8dc; }
+  .medal.bronze { color: #d89b6a; }
+  .card.crash h1 { color: #ff5252; }
+  .card.crash .count { font-size: 20px; font-weight: bold; color: #ffca28; margin-top: 14px; }
   .card { text-align: center; color: #fff; max-width: 560px; padding: 30px 40px;
     background: rgba(8, 24, 40, .72); border: 1px solid rgba(255,255,255,.3); border-radius: 16px; }
   .card h1 { margin: 0 0 4px; font-size: 46px; letter-spacing: .06em; color: #ffb300; }
@@ -49,9 +71,9 @@
   .card .controls { text-align: left; display: inline-block; font-size: 14px; line-height: 1.8;
     background: rgba(255,255,255,.08); border-radius: 10px; padding: 10px 18px; margin: 10px 0 18px; }
   .card .controls b { color: #4dd0e1; }
-  #fly-button { font-size: 20px; font-weight: bold; padding: 12px 34px; border: 0; border-radius: 30px;
+  #fly-button, #again-button { font-size: 20px; font-weight: bold; padding: 12px 34px; border: 0; border-radius: 30px;
     background: #ffb300; color: #3e2700; cursor: pointer; letter-spacing: .05em; }
-  #fly-button:hover { background: #ffca28; }
+  #fly-button:hover, #again-button:hover { background: #ffca28; }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 </style>
 <script type="importmap">
@@ -62,10 +84,16 @@
 <div id="scene" aria-label="Island Hopper: fly a prop plane through 8 rings over a tropical island chain"></div>
 <div id="hud"></div>
 <div id="overlay">
-  <div class="card">
+  <div class="card hidden" id="title-card">
+    <h1 class="big">ISLAND HOPPER</h1>
+    <h2>Fly the island chain — 8 rings, one runway, a full tank of nerve.</h2>
+    <p>Sunset over the islands. Your plane is fuelled and waiting on the runway.</p>
+    <p class="press">PRESS SPACE TO TAKE OFF</p>
+  </div>
+  <div class="card hidden" id="briefing-card">
     <h1>ISLAND HOPPER</h1>
     <h2>Fly the island chain — 8 rings, one runway, a full tank of nerve.</h2>
-    <p>Take off from Pulau Karimbu, thread all <b>8 glowing rings</b> over the islands, and land back on the runway to refuel and repair. Watch your fuel: empty tanks mean gliding. Three hard hits and you crash — but your score survives.</p>
+    <p>Take off from Pulau Karimbu, thread all <b>8 glowing rings in order</b> over the islands, and land back on the runway to refuel and repair. Rings pay more in a row — ring 8 pays <b>+800</b>. Grab the amber fuel canisters over Pulau Solmar and Pulau Nusa. Watch your fuel: empty tanks mean gliding. Three hard hits and you crash — but your score survives.</p>
     <div class="controls">
       <b>↑ / ↓</b> pitch (climb / dive) &nbsp;·&nbsp; <b>← / →</b> bank &amp; turn<br>
       <b>W / S</b> throttle up / down &nbsp;·&nbsp; <b>R</b> reset to runway<br>
@@ -74,6 +102,26 @@
     <br>
     <button id="fly-button">✈ &nbsp;CLICK TO FLY</button>
     <p style="font-size:13px; opacity:.75">Stall below 55 km/h — keep the speed up. Gentle landings only.</p>
+  </div>
+  <div class="card hidden" id="results-card">
+    <h1>🏆 MISSION COMPLETE</h1>
+    <h2>All 8 rings flown — welcome home, pilot.</h2>
+    <div class="stats">
+      <span>TIME</span><b id="res-time">0:00</b><br>
+      <span>RINGS</span><b id="res-rings">8 / 8</b><br>
+      <span>FUEL LEFT</span><b id="res-fuel">0%</b><br>
+      <span>LANDING</span><b id="res-landing">—</b><br>
+      <span>SCORE</span><b id="res-score">0</b>
+    </div>
+    <p class="medal gold" id="res-medal">🏅 GOLD MEDAL</p>
+    <br>
+    <button id="again-button">✈ &nbsp;FLY AGAIN</button>
+  </div>
+  <div class="card crash hidden" id="crash-card">
+    <h1>💥 AIRFRAME FAILURE</h1>
+    <h2 id="crash-hits">3/3 hits — the island claims another plane.</h2>
+    <p>Your score and rings are safe. The ground crew is already rolling out a fresh plane.</p>
+    <p class="count" id="crash-count">Respawning in 3…</p>
   </div>
 </div>
 <p id="status" role="status" aria-live="polite"></p>

@@ -5,13 +5,20 @@ import * as THREE from 'three';
 import { buildTerrain, RINGS, RUNWAY } from './terrain.js';
 import { buildPlane, posePlane, animatePlane } from './plane.js';
 import { freshState, stepFlight, respawnAtRunway, forwardOf } from './physics.js';
-import { buildRings, checkRingPass, refuelAndRepair, missionComplete, nextRingLabel, animateRings, RING_SCORE } from './missions.js';
+import {
+  buildRings, checkRingPass, refuelAndRepair, missionComplete, nextRingLabel,
+  animateRings, comboFor, buildCanisters, checkCanisterPickup, resetRings,
+  resetCanisters, updateRingColors,
+} from './missions.js';
 import { buildHud, updateHud, showBanner } from './hud.js';
 import { freshInput, bindInput, decayLook } from './input.js';
 import { startAudio, setEngine, playRingChime, playThud, playMissionFanfare } from './audio.js';
+import { SCREENS, showCard, showResults, showCrash } from './screens.js';
+import { buildFx } from './fx.js';
 
 const params = new URLSearchParams(window.location.search);
 const shotName = params.get('shot') || '';
+const staging = shotName !== '';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -26,36 +33,79 @@ const terrain = buildTerrain(scene);
 const plane = buildPlane();
 scene.add(plane.group);
 const rings = buildRings(scene);
+const canisters = buildCanisters(scene);
+const fx = buildFx(scene);
 const hud = buildHud();
 const input = freshInput();
 const state = freshState();
 
-let started = false;
+let screen = SCREENS.TITLE;
 let announcedComplete = false;
 let clock = 0;
+let orbitAngle = 0.7;
+let crashTimer = 0;
+let burstTimer = 0;
 
-const overlay = document.getElementById('overlay');
-const flyButton = document.getElementById('fly-button');
+showCard('title');
 
-function startGame() {
-  if (started) return;
-  started = true;
-  overlay.classList.add('hidden');
+/** Advance the state machine on Space / Enter / click. */
+function advanceScreen() {
+  if (screen === SCREENS.TITLE) {
+    screen = SCREENS.BRIEFING;
+    showCard('briefing');
+  } else if (screen === SCREENS.BRIEFING) {
+    startFlying();
+  }
+}
+
+function startFlying() {
+  screen = SCREENS.FLYING;
+  showCard(null);
   startAudio();
 }
 
-flyButton.addEventListener('click', startGame);
+function resetRun() {
+  Object.assign(state, freshState());
+  resetRings(rings);
+  resetCanisters(canisters);
+  announcedComplete = false;
+  screen = SCREENS.FLYING;
+  showCard(null);
+}
+
+document.getElementById('fly-button').addEventListener('click', startFlying);
+document.getElementById('again-button').addEventListener('click', resetRun);
+document.getElementById('overlay').addEventListener('click', (event) => {
+  if (event.target.id === 'fly-button' || event.target.id === 'again-button') return;
+  advanceScreen();
+});
 window.addEventListener('keydown', (event) => {
-  if ((event.key === 'Enter' || event.key === ' ') && !started) startGame();
+  if (event.key === 'Enter' || event.key === ' ') advanceScreen();
 });
 
 bindInput(input, renderer.domElement, () => {
   Object.assign(state, freshState());
+  resetRings(rings);
+  resetCanisters(canisters);
   showBanner(hud, 'RESET — BACK ON THE RUNWAY');
 });
 
 /** Chase camera: behind and above the plane, smoothed, plus mouse-look offset. */
 function updateCamera(dt) {
+  if (screen === SCREENS.TITLE || screen === SCREENS.BRIEFING) {
+    // Slow orbit around the parked plane at sunset.
+    if (!staging) orbitAngle += dt * 0.12;
+    const radius = 20;
+    const desired = new THREE.Vector3(
+      state.pos.x + Math.sin(orbitAngle) * radius,
+      state.pos.y + 5.5,
+      state.pos.z + Math.cos(orbitAngle) * radius,
+    );
+    const k = 1 - Math.exp(-dt * 3);
+    camera.position.lerp(desired, k);
+    camera.lookAt(state.pos.x, state.pos.y + 1, state.pos.z);
+    return;
+  }
   const forward = forwardOf(state.heading);
   const back = 15;
   const height = 5;
@@ -91,45 +141,94 @@ function handleEvent(event) {
   if (event === 'takeoff') {
     showBanner(hud, 'AIRBORNE — GEAR UP, ISLANDS AHEAD');
   } else if (event === 'landed') {
+    const grade = state.lastLanding || { grade: 'FIRM', bonus: 200 };
+    state.score += grade.bonus;
     const restored = refuelAndRepair(state);
-    showBanner(hud, `LANDED — REFUELED +${restored.fuelAdded}% · REPAIRED`, 'good');
+    if (grade.grade === 'HARD') {
+      showBanner(hud, `HARD LANDING — DAMAGE ${state.damage}/3`, 'bad');
+    } else {
+      showBanner(hud, `${grade.grade}! +${grade.bonus}  ·  REFUELED +${restored.fuelAdded}%`, 'good');
+    }
     playThud();
+    if (missionComplete(rings)) {
+      setTimeout(() => {
+        // Only show results if the pilot is still parked on the runway.
+        if (screen !== SCREENS.FLYING || !state.onGround) return;
+        screen = SCREENS.LANDED;
+        showResults(state);
+      }, 1400);
+    }
   } else if (event === 'hard-landing') {
     showBanner(hud, `HARD LANDING — DAMAGE ${state.damage}/3`, 'bad');
     playThud();
   } else if (event === 'crash') {
-    showBanner(hud, 'CRASHED — BACK TO THE RUNWAY (+30s)', 'bad');
+    screen = SCREENS.CRASHED;
+    crashTimer = 3;
+    showCrash(state, 3);
     playThud();
-    setTimeout(() => respawnAtRunway(state), 900);
   }
 }
 
 function frame(dt) {
   clock += dt;
-  if (started && !shotName) {
+  if (screen === SCREENS.FLYING && !staging) {
     const event = stepFlight(state, input, dt);
     if (event) handleEvent(event);
     const ring = checkRingPass(rings, state.pos);
     if (ring) {
-      state.score += RING_SCORE;
+      const combo = comboFor(state.ringsFlown);
+      state.score += combo.points;
       state.ringsFlown += 1;
-      showBanner(hud, `RING ${state.ringsFlown}/8 — ${ring.def.label}  +${RING_SCORE}`, 'good');
+      fx.spawnBurst(new THREE.Vector3(ring.def.x, ring.def.y, ring.def.z));
+      const label = combo.multiplier > 1
+        ? `RING ${state.ringsFlown}/8 — ${ring.def.label}  +${combo.points} x${combo.multiplier} COMBO`
+        : `RING ${state.ringsFlown}/8 — ${ring.def.label}  +${combo.points}`;
+      showBanner(hud, label, 'good');
       playRingChime();
       if (missionComplete(rings) && !announcedComplete) {
         announcedComplete = true;
         playMissionFanfare();
-        setTimeout(() => showBanner(hud, `MISSION COMPLETE — ALL 8 RINGS IN ${Math.floor(state.time / 60)}:${String(Math.floor(state.time % 60)).padStart(2, '0')}!`, 'good'), 2400);
+        setTimeout(() => showBanner(hud, `ALL 8 RINGS — LAND ON THE RUNWAY TO FINISH!`, 'good'), 2400);
       }
+    }
+    const can = checkCanisterPickup(canisters, state);
+    if (can) {
+      showBanner(hud, `FUEL CANISTER +45% — ${can.def.label}`, 'good');
+      playRingChime();
     }
     setEngine(state.throttle, state.speed);
   }
+  if (screen === SCREENS.CRASHED && !staging) {
+    crashTimer -= dt;
+    const left = Math.max(0, Math.ceil(crashTimer));
+    showCrash(state, left);
+    if (crashTimer <= 0) {
+      respawnAtRunway(state);
+      screen = SCREENS.FLYING;
+      showCard(null);
+      showBanner(hud, 'FRESH PLANE — BACK ON THE RUNWAY');
+    }
+  }
+  if (staging && shotName === 'ringpass') {
+    // Keep the burst alive for the screenshot: re-fire it as it fades.
+    burstTimer += dt;
+    if (burstTimer > 0.8) {
+      burstTimer = 0;
+      const ring = rings[3];
+      ring.flash = 0.45;
+      ring.torus.material.color.set(0xffffff);
+      ring.group.scale.setScalar(1.3);
+      fx.spawnBurst(new THREE.Vector3(ring.def.x, ring.def.y, ring.def.z));
+    }
+  }
   decayLook(input, dt);
   terrain.update(dt, clock);
-  animateRings(rings, clock);
+  animateRings(rings, canisters, clock, dt);
+  fx.update(dt, plane, state);
   posePlane(plane, state);
   animatePlane(plane, state, dt, clock);
   updateCamera(dt);
-  updateHud(hud, state, nextRingLabel(rings));
+  updateHud(hud, state, rings, canisters);
   renderer.render(scene, camera);
 }
 
@@ -137,21 +236,69 @@ function frame(dt) {
 function markFlown(count) {
   for (let i = 0; i < count && i < rings.length; i += 1) {
     rings[i].flown = true;
-    rings[i].torus.material.color.set(0x37d67a);
   }
+  updateRingColors(rings);
 }
 
 /**
  * Screenshot scenes (?shot=...): stage the real game at a real moment, then render.
- * cover — chase view mid-flight, ring ahead, runway in the distance.
- * beach — low pass over the beach of Pulau Solmar.
- * runway — parked on the runway just after a landing (refuel banner showing).
- * ring — passing through the Lagoon ring with the score banner showing.
+ * title — title card over the parked plane at sunset, camera orbiting.
+ * ringpass — through the Lagoon ring with burst + combo banner.
+ * landing — just touched down, BUTTER grade banner showing.
+ * results — results card with time, rings, fuel, landing, score and GOLD medal.
+ * cover/beach/runway/ring — the original staging scenes, kept for reference.
  */
 function stageShot(name) {
-  started = true;
-  overlay.classList.add('hidden');
-  if (name === 'beach') {
+  if (name === 'title') {
+    screen = SCREENS.TITLE;
+    showCard('title');
+  } else if (name === 'ringpass') {
+    screen = SCREENS.FLYING;
+    showCard(null);
+    const lagoon = RINGS[3];
+    state.pos.set(lagoon.x + 30, lagoon.y, lagoon.z + 20);
+    state.heading = Math.atan2(-(lagoon.x - state.pos.x), -(lagoon.z - state.pos.z));
+    state.speed = 52;
+    state.throttle = 0.85;
+    state.fuel = 63;
+    state.score = 1000;
+    state.ringsFlown = 4;
+    markFlown(4);
+    rings[3].flash = 0.45;
+    rings[3].torus.material.color.set(0xffffff);
+    rings[3].group.scale.setScalar(1.3);
+    fx.spawnBurst(new THREE.Vector3(lagoon.x, lagoon.y, lagoon.z));
+    showBanner(hud, 'RING 4/8 — Lagoon  +400 x4 COMBO', 'good', 9000);
+  } else if (name === 'landing') {
+    screen = SCREENS.FLYING;
+    showCard(null);
+    state.pos.set(RUNWAY.x, RUNWAY.altitude + 1.6, RUNWAY.z + RUNWAY.length / 2 - 12);
+    state.heading = 0;
+    state.speed = 0;
+    state.throttle = 0;
+    state.fuel = 61;
+    state.score = 3650;
+    state.ringsFlown = 8;
+    state.lastLanding = { grade: 'BUTTER', bonus: 500 };
+    markFlown(8);
+    showBanner(hud, 'BUTTER! +500  ·  REFUELED +39%', 'good', 9000);
+  } else if (name === 'results') {
+    screen = SCREENS.LANDED;
+    state.pos.set(RUNWAY.x, RUNWAY.altitude + 1.6, RUNWAY.z + RUNWAY.length / 2 - 12);
+    state.heading = 0;
+    state.speed = 0;
+    state.throttle = 0;
+    state.fuel = 61;
+    state.score = 3650;
+    state.ringsFlown = 8;
+    state.time = 272;
+    state.damage = 0;
+    state.lastLanding = { grade: 'BUTTER', bonus: 500 };
+    markFlown(8);
+    showResults(state);
+  } else if (name === 'beach') {
+    screen = SCREENS.FLYING;
+    showCard(null);
     state.pos.set(-720, 30, -280);
     state.heading = -0.62;
     state.speed = 46;
@@ -161,6 +308,8 @@ function stageShot(name) {
     state.ringsFlown = 1;
     markFlown(1);
   } else if (name === 'runway') {
+    screen = SCREENS.FLYING;
+    showCard(null);
     state.pos.set(RUNWAY.x, RUNWAY.altitude + 1.6, RUNWAY.z + RUNWAY.length / 2 - 12);
     state.heading = 0;
     state.speed = 0;
@@ -171,6 +320,8 @@ function stageShot(name) {
     markFlown(8);
     showBanner(hud, 'LANDED — REFUELED +100% · REPAIRED', 'good', 9000);
   } else if (name === 'ring') {
+    screen = SCREENS.FLYING;
+    showCard(null);
     const lagoon = RINGS[3];
     state.pos.set(lagoon.x + 26, lagoon.y, lagoon.z + 18);
     state.heading = Math.atan2(-(lagoon.x - state.pos.x), -(lagoon.z - state.pos.z));
@@ -183,6 +334,8 @@ function stageShot(name) {
     showBanner(hud, 'RING 4/8 — Lagoon  +100', 'good', 9000);
   } else {
     // cover: Lagoon ring ahead-right, runway in the distance to the left.
+    screen = SCREENS.FLYING;
+    showCard(null);
     state.pos.set(280, 60, 280);
     state.heading = 0.25;
     state.speed = 50;
@@ -197,7 +350,7 @@ function stageShot(name) {
     updateCamera(1 / 30);
     posePlane(plane, state);
   }
-  updateHud(hud, state, nextRingLabel(rings));
+  updateHud(hud, state, rings, canisters);
   renderer.render(scene, camera);
 }
 
@@ -209,25 +362,17 @@ window.addEventListener('resize', () => {
 
 if (shotName) {
   stageShot(shotName);
-  // Keep rendering so the water, smoke and rings keep their life in the frame.
-  let last = performance.now();
-  const loop = (now) => {
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
-    frame(dt);
-    requestAnimationFrame(loop);
-  };
-  requestAnimationFrame(loop);
-} else {
-  let last = performance.now();
-  const loop = (now) => {
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
-    frame(dt);
-    requestAnimationFrame(loop);
-  };
-  requestAnimationFrame(loop);
 }
 
+// Keep rendering so the water, smoke and rings keep their life in the frame.
+let last = performance.now();
+const loop = (now) => {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  frame(dt);
+  requestAnimationFrame(loop);
+};
+requestAnimationFrame(loop);
+
 // Expose the live state for play-testing from the browser console.
-window.__islandHopper = { state, rings, input, startGame };
+window.__islandHopper = { state, rings, canisters, input, screen: () => screen, advanceScreen, startFlying };
