@@ -1,7 +1,15 @@
-// main.ts — Island Hopper hand-in: copy game/ + screenshots/ to /output and write dossier.json.
+// Island Hopper — 3D flight game (Node 22, standard library only).
+// make.fun bounty best-flight-game-20261126-0057.
+// This program hands the game in: it copies game/ and screenshots/ from beside
+// this file to /output and writes /output/dossier.json, the summary the judge
+// reads, with the vendored make.fun library (vendor/makefun-game.ts).
+// The game itself is plain static files a desktop browser loads offline:
+// game/index.html plus its ES modules and a vendored three.js build.
 //
-// Run locally with:  mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-// The grader runs it with /output as the destination instead.
+// Play it locally with a static server, e.g. `python3 -m http.server` in the
+// repo root, then open http://localhost:8000/game/.
+// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,20 +19,17 @@ import { buildDossier } from './vendor/makefun-game.ts';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-// The whole game directory goes over as-is: index.html, src/, vendor/.
 mkdirSync(out, { recursive: true });
 cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-
-// Screenshots go beside it (3 or 4 real renders of the game).
 mkdirSync(join(out, 'screenshots'), { recursive: true });
 if (existsSync(join(here, 'screenshots'))) {
   cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
 }
 
-// The dossier is the summary the judge reads; the gate rebuilds it with the same
-// library and requires a byte-for-byte match, so the caps here must be the gate's:
-// 160 KiB of source text, at most 4 screenshots of 256 KiB each, game/ at most
-// 993 files / 48 MiB, and no path under game/ longer than 1000 bytes.
+// The scorer's own caps: only text_max_bytes shapes the bytes; the others refuse
+// an entry the scorer would refuse (more than 4 screenshots or one over 256 KiB;
+// more than 993 files in game/ or 48 MiB of game files in all, or a path under
+// game/ over 1000 bytes).
 writeFileSync(
   join(out, 'dossier.json'),
   buildDossier(out, {

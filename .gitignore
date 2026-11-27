@@ -1,6 +1,4 @@
 node_modules/
-.bundle/
-bundle-parent.tar.gz
 out/
-*.log
 .DS_Store
+*.log

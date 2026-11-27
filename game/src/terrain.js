@@ -1,249 +1,281 @@
-// terrain.js — the island chain: sea, islands, volcano, runway, clouds, sun and fog.
-// One clear job: build the static world and answer "how high is the ground here?".
-
+// terrain.js — Island Hopper world: islands, runway, sea, sky, clouds, foam.
+// Fresh write from polish-spec.md §1 + §5. Deterministic RNG mulberry32(20261126).
 import * as THREE from 'three';
 
-/** Deterministic RNG so the world looks the same on every load. */
 export function mulberry32(seed) {
   let a = seed >>> 0;
-  return function random() {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-/** Islands: name, centre (x, z), radius, top height. The first is the home island. */
 export const ISLANDS = [
-  { name: 'Pulau Karimbu', x: 0, z: 0, radius: 280, height: 8 },
-  { name: 'Pulau Solmar', x: -620, z: -420, radius: 150, height: 14 },
-  { name: 'Pulau Bara', x: 540, z: -560, radius: 170, height: 90 },
-  { name: 'Pulau Nusa', x: 720, z: 480, radius: 120, height: 10 },
-  { name: 'Pulau Kecil', x: -540, z: 620, radius: 90, height: 6 },
-  { name: 'Pulau Terapung', x: 120, z: -980, radius: 110, height: 18 },
+  { name: 'Karimbu', x: 0, z: 0, r: 280, top: 8 },
+  { name: 'Solmar', x: -620, z: -420, r: 150, top: 14 },
+  { name: 'Bara', x: 540, z: -560, r: 170, top: 90, volcano: true },
+  { name: 'Nusa', x: 720, z: 480, r: 120, top: 10 },
+  { name: 'Kecil', x: -540, z: 620, r: 90, top: 6 },
+  { name: 'Terapung', x: 120, z: -980, r: 110, top: 18 },
 ];
 
-/** The runway sits on Pulau Karimbu, heading north (-Z). */
-export const RUNWAY = {
-  x: 0, z: 60, length: 220, width: 16, heading: 0, altitude: 8,
-};
+export const RUNWAY = { x: 0, z: 60, len: 220, w: 16, alt: 8 };
 
-/** 8 target rings: position, altitude and the yaw the torus faces. */
-export const RINGS = [
-  { x: -180, y: 55, z: -260, yaw: 0.5, label: 'Pulau Karimbu' },
-  { x: -620, y: 70, z: -420, yaw: -0.9, label: 'Pulau Solmar' },
-  { x: 540, y: 150, z: -560, yaw: 2.4, label: 'Pulau Bara' },
-  { x: 300, y: 45, z: 120, yaw: 1.2, label: 'Lagoon' },
-  { x: 0, y: 28, z: -320, yaw: 0.0, label: 'Runway approach' },
-  { x: 720, y: 65, z: 480, yaw: -2.0, label: 'Pulau Nusa' },
-  { x: -540, y: 50, z: 620, yaw: 0.8, label: 'Pulau Kecil' },
-  { x: 120, y: 95, z: -980, yaw: 3.1, label: 'Pulau Terapung' },
-];
-
-const SEA_SIZE = 4200;
-
-/** Ground height at (x, z): island top inside a disc, sea level 0 outside. */
+// Smooth island top height with edge falloff; 0 = sea level.
 export function groundHeightAt(x, z) {
-  for (const island of ISLANDS) {
-    const dx = x - island.x;
-    const dz = z - island.z;
+  let h = 0;
+  for (const isl of ISLANDS) {
+    const dx = x - isl.x, dz = z - isl.z;
     const d = Math.sqrt(dx * dx + dz * dz);
-    if (d < island.radius) {
-      const edge = Math.max(0, (d - island.radius * 0.82) / (island.radius * 0.18));
-      return island.height * (1 - edge * edge);
+    if (d < isl.r) {
+      const t = d / isl.r; // 0 centre -> 1 edge
+      const fall = Math.cos(t * Math.PI * 0.5); // 1 -> 0 smooth
+      const hh = isl.top * fall * fall;
+      if (hh > h) h = hh;
     }
   }
-  return 0;
+  return h;
 }
 
-/** True when (x, z) is over the runway strip. */
 export function overRunway(x, z) {
-  const dz = z - RUNWAY.z;
-  const dx = x - RUNWAY.x;
-  return Math.abs(dx) < RUNWAY.width / 2 + 4 && Math.abs(dz) < RUNWAY.length / 2;
+  return Math.abs(x - RUNWAY.x) < 12 && Math.abs(z - RUNWAY.z) < 110;
 }
 
-function makeTree(random) {
-  const tree = new THREE.Group();
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.5, 0.8, 4, 6),
-    new THREE.MeshLambertMaterial({ color: 0x8a5a2b }),
-  );
-  trunk.position.y = 2;
-  const leaves = new THREE.Mesh(
-    new THREE.ConeGeometry(3.2, 8, 7),
-    new THREE.MeshLambertMaterial({ color: 0x2f7d32 }),
-  );
-  leaves.position.y = 7;
-  tree.add(trunk, leaves);
-  const s = 0.8 + random() * 0.9;
-  tree.scale.setScalar(s);
-  return tree;
+function makeGlowTexture(inner, outer) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
+  grad.addColorStop(0, inner);
+  grad.addColorStop(1, outer);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
 }
 
-function makeCloud(random) {
-  const cloud = new THREE.Group();
-  const material = new THREE.MeshBasicMaterial({ color: 0xfff6e8, transparent: true, opacity: 0.95 });
-  const puffs = 3 + Math.floor(random() * 3);
-  for (let i = 0; i < puffs; i += 1) {
-    const puff = new THREE.Mesh(new THREE.SphereGeometry(10 + random() * 12, 8, 6), material);
-    puff.position.set((random() - 0.5) * 36, (random() - 0.5) * 6, (random() - 0.5) * 18);
-    puff.scale.y = 0.55;
-    cloud.add(puff);
-  }
-  return cloud;
-}
-
-/**
- * Build the whole static world into the scene.
- * Returns { water, clouds, smokePuffs, update(dt, t) } for the animated bits.
- */
 export function buildTerrain(scene) {
-  const random = mulberry32(20261126);
+  const rng = mulberry32(20261126);
+  const out = { water: null, waterGeo: null, clouds: [], smoke: [], sunSprite: null, sunLight: null, cloudInst: null, waterBase: null };
 
-  scene.background = new THREE.Color(0xffb36b);
+  // ---- Gradient sky dome: warm orange horizon -> deep blue top ----
+  const skyGeo = new THREE.SphereGeometry(3200, 24, 16);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      top: { value: new THREE.Color(0x2b4a7a) },
+      mid: { value: new THREE.Color(0x7a6a9a) },
+      bot: { value: new THREE.Color(0xffb36b) },
+    },
+    vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+    fragmentShader: 'varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot; void main(){ float h = normalize(vP).y; vec3 c = h > 0.25 ? mix(mid, top, smoothstep(0.25, 0.9, h)) : mix(bot, mid, smoothstep(-0.08, 0.25, h)); gl_FragColor = vec4(c, 1.0); }',
+  });
+  scene.add(new THREE.Mesh(skyGeo, skyMat));
+
+  // ---- Fog in the horizon colour ----
   scene.fog = new THREE.Fog(0xffc98a, 500, 2600);
 
-  const sun = new THREE.DirectionalLight(0xffd9a0, 1.6);
-  sun.position.set(-600, 320, -800);
+  // ---- Golden-hour sun: warm directional light with soft shadows ----
+  const sun = new THREE.DirectionalLight(0xffc27a, 2.6);
+  sun.position.set(-900, 260, -700);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  const S = 120;
+  sun.shadow.camera.left = -S; sun.shadow.camera.right = S;
+  sun.shadow.camera.top = S; sun.shadow.camera.bottom = -S;
+  sun.shadow.camera.near = 100; sun.shadow.camera.far = 2600;
+  sun.shadow.bias = -0.0005;
   scene.add(sun);
-  scene.add(new THREE.HemisphereLight(0xffe0b3, 0x2e6f8e, 0.9));
+  scene.add(sun.target);
+  scene.add(new THREE.HemisphereLight(0x8fa8d8, 0x3a5a3a, 1.0));
+  out.sunLight = sun;
 
-  // Sun disc low on the horizon.
   const sunDisc = new THREE.Mesh(
-    new THREE.CircleGeometry(70, 32),
-    new THREE.MeshBasicMaterial({ color: 0xffe9a8, fog: false }),
+    new THREE.CircleGeometry(90, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffe9a8, fog: false })
   );
-  sunDisc.position.set(-900, 260, -1500);
+  sunDisc.position.set(-1500, 320, -1200);
   sunDisc.lookAt(0, 60, 0);
   scene.add(sunDisc);
+  const sunGlowTex = makeGlowTexture('rgba(255,220,140,0.9)', 'rgba(255,150,60,0)');
+  const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: sunGlowTex, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, transparent: true, opacity: 0.9,
+  }));
+  sunGlow.scale.set(700, 700, 1);
+  sunGlow.position.copy(sunDisc.position);
+  scene.add(sunGlow);
+  out.sunSprite = sunGlow;
 
-  // Sea: a big plane whose vertices gently wave.
-  const waterGeo = new THREE.PlaneGeometry(SEA_SIZE, SEA_SIZE, 48, 48);
+  // ---- Sea: animated vertex waves ----
+  const waterGeo = new THREE.PlaneGeometry(5200, 5200, 64, 64);
   waterGeo.rotateX(-Math.PI / 2);
-  const water = new THREE.Mesh(
-    waterGeo,
-    new THREE.MeshLambertMaterial({ color: 0x1e7fa8, transparent: true, opacity: 0.96 }),
-  );
+  const waterMat = new THREE.MeshPhongMaterial({
+    color: 0x1e6f8e, shininess: 90, specular: 0xffd9a0, transparent: true, opacity: 0.94,
+  });
+  const water = new THREE.Mesh(waterGeo, waterMat);
   water.position.y = 0;
+  water.receiveShadow = true;
   scene.add(water);
-  const waterBase = waterGeo.attributes.position.array.slice();
+  out.water = water;
+  out.waterGeo = waterGeo;
+  out.waterBase = waterGeo.attributes.position.array.slice();
 
-  // Islands: sand rim, green top, plus a volcano cone on Pulau Bara.
-  for (const island of ISLANDS) {
-    const sand = new THREE.Mesh(
-      new THREE.CylinderGeometry(island.radius, island.radius * 1.12, 3, 24),
-      new THREE.MeshLambertMaterial({ color: 0xe8d29a }),
-    );
-    sand.position.set(island.x, 1.2, island.z);
-    scene.add(sand);
-    const top = island.name === 'Pulau Bara'
-      ? new THREE.Mesh(
-        new THREE.ConeGeometry(island.radius, island.height, 24),
-        new THREE.MeshLambertMaterial({ color: 0x6b4a3a }),
-      )
-      : new THREE.Mesh(
-        new THREE.CylinderGeometry(island.radius * 0.96, island.radius, island.height, 24),
-        new THREE.MeshLambertMaterial({ color: 0x4caf50 }),
-      );
-    top.position.set(island.x, island.height / 2, island.z);
-    scene.add(top);
-  }
+  // ---- Islands ----
+  const sandMat = new THREE.MeshLambertMaterial({ color: 0xe8d8a0 });
+  const grassMat = new THREE.MeshLambertMaterial({ color: 0x4a9e4a });
+  const rockMat = new THREE.MeshLambertMaterial({ color: 0x6b5a4a });
+  const lavaMat = new THREE.MeshBasicMaterial({ color: 0xff5a1a });
+  const treeTrunkMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2a });
+  const treeTopMat = new THREE.MeshLambertMaterial({ color: 0x2e7d32 });
 
-  // Volcano crater + smoke on Pulau Bara.
-  const crater = new THREE.Mesh(
-    new THREE.ConeGeometry(46, 34, 12),
-    new THREE.MeshLambertMaterial({ color: 0x3d2b26 }),
-  );
-  crater.position.set(540, 90 + 15, -560);
-  scene.add(crater);
-  const smokePuffs = [];
-  const smokeMat = new THREE.MeshLambertMaterial({ color: 0x9a9a9a, transparent: true, opacity: 0.55 });
-  for (let i = 0; i < 7; i += 1) {
-    const puff = new THREE.Mesh(new THREE.SphereGeometry(7 + i * 1.6, 8, 6), smokeMat.clone());
-    puff.position.set(540 + (random() - 0.5) * 10, 108 + i * 9, -560 + (random() - 0.5) * 10);
-    puff.userData.phase = random() * Math.PI * 2;
-    scene.add(puff);
-    smokePuffs.push(puff);
-  }
-
-  // Low-poly trees scattered on the flat islands.
-  for (const island of ISLANDS) {
-    if (island.name === 'Pulau Bara') continue;
-    const count = Math.floor(island.radius / 14);
-    for (let i = 0; i < count; i += 1) {
-      const angle = random() * Math.PI * 2;
-      const dist = random() * island.radius * 0.8;
-      const tree = makeTree(random);
-      tree.position.set(
-        island.x + Math.cos(angle) * dist,
-        island.height - 0.4,
-        island.z + Math.sin(angle) * dist,
-      );
-      tree.rotation.y = random() * Math.PI * 2;
-      scene.add(tree);
-    }
-  }
-
-  // Runway: dark strip with white dashes + threshold bars.
-  const runwayGroup = new THREE.Group();
-  const strip = new THREE.Mesh(
-    new THREE.BoxGeometry(RUNWAY.width, 1, RUNWAY.length),
-    new THREE.MeshLambertMaterial({ color: 0x3a3f46 }),
-  );
-  strip.position.y = RUNWAY.altitude + 0.4;
-  runwayGroup.add(strip);
-  const dashMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  for (let d = -RUNWAY.length / 2 + 15; d < RUNWAY.length / 2 - 10; d += 24) {
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 10), dashMat);
-    dash.position.set(0, RUNWAY.altitude + 1, d);
-    runwayGroup.add(dash);
-  }
-  for (const end of [-1, 1]) {
-    for (let b = -1; b <= 1; b += 1) {
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(3, 0.2, 8), dashMat);
-      bar.position.set(b * 5, RUNWAY.altitude + 1, end * (RUNWAY.length / 2 - 8));
-      runwayGroup.add(bar);
-    }
-  }
-  runwayGroup.position.set(RUNWAY.x, 0, RUNWAY.z);
-  scene.add(runwayGroup);
-
-  // Drifting clouds.
-  const clouds = [];
-  for (let i = 0; i < 12; i += 1) {
-    const cloud = makeCloud(random);
-    cloud.position.set((random() - 0.5) * 2600, 180 + random() * 140, (random() - 0.5) * 2600);
-    cloud.userData.speed = 1.5 + random() * 2;
-    scene.add(cloud);
-    clouds.push(cloud);
-  }
-
-  /** Animate the water, clouds and volcano smoke. */
-  function update(dt, t) {
-    const pos = waterGeo.attributes.position;
-    for (let i = 0; i < pos.count; i += 1) {
-      const bx = waterBase[i * 3];
-      const bz = waterBase[i * 3 + 2];
-      pos.array[i * 3 + 1] = Math.sin(bx * 0.012 + t * 0.9) * 1.1 + Math.cos(bz * 0.01 + t * 0.7) * 1.1;
-    }
-    pos.needsUpdate = true;
-    for (const cloud of clouds) {
-      cloud.position.x += cloud.userData.speed * dt;
-      if (cloud.position.x > 1500) cloud.position.x = -1500;
-    }
-    for (const puff of smokePuffs) {
-      puff.position.y += dt * 3;
-      puff.material.opacity = 0.55 - ((puff.position.y - 108) / 70) * 0.5;
-      if (puff.position.y > 178) {
-        puff.position.y = 108;
-        puff.material.opacity = 0.55;
+  for (const isl of ISLANDS) {
+    const grp = new THREE.Group();
+    grp.position.set(isl.x, 0, isl.z);
+    const base = new THREE.Mesh(new THREE.ConeGeometry(isl.r, isl.top * 0.9 + 6, 28), sandMat);
+    base.position.y = (isl.top * 0.9 + 6) / 2 - 3;
+    base.receiveShadow = true;
+    grp.add(base);
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(isl.r * 0.78, isl.top + 2, 28), grassMat);
+    cap.position.y = (isl.top + 2) / 2 - 1;
+    cap.receiveShadow = true;
+    grp.add(cap);
+    if (isl.volcano) {
+      const crater = new THREE.Mesh(new THREE.CylinderGeometry(isl.r * 0.16, isl.r * 0.22, 6, 20), rockMat);
+      crater.position.y = isl.top + 1;
+      grp.add(crater);
+      const lava = new THREE.Mesh(new THREE.CylinderGeometry(isl.r * 0.13, isl.r * 0.13, 1.2, 20), lavaMat);
+      lava.position.y = isl.top + 3.5;
+      grp.add(lava);
+      for (let i = 0; i < 7; i++) {
+        const puff = new THREE.Mesh(
+          new THREE.SphereGeometry(6 + rng() * 5, 8, 6),
+          new THREE.MeshLambertMaterial({ color: 0x777777, transparent: true, opacity: 0.75 })
+        );
+        puff.position.set((rng() - 0.5) * 14, isl.top + 10 + i * 9, (rng() - 0.5) * 14);
+        puff.userData.phase = rng() * Math.PI * 2;
+        grp.add(puff);
+        out.smoke.push(puff);
       }
-      puff.position.x = 540 + Math.sin(t * 0.5 + puff.userData.phase) * 6;
     }
+    // White foam ring hugging the shoreline
+    const foam = new THREE.Mesh(
+      new THREE.RingGeometry(isl.r - 2, isl.r + 4, 48),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
+    );
+    foam.rotation.x = -Math.PI / 2;
+    foam.position.y = 0.3;
+    grp.add(foam);
+    // Trees (deterministic)
+    const nTrees = Math.floor(isl.r / 14);
+    for (let i = 0; i < nTrees; i++) {
+      const a = rng() * Math.PI * 2;
+      const rr = rng() * isl.r * 0.62;
+      const tx = Math.cos(a) * rr, tz = Math.sin(a) * rr;
+      const gy = groundHeightAt(isl.x + tx, isl.z + tz);
+      if (gy < 1) continue;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 3, 6), treeTrunkMat);
+      trunk.position.set(tx, gy + 1.5, tz);
+      trunk.castShadow = true;
+      grp.add(trunk);
+      const top = new THREE.Mesh(new THREE.SphereGeometry(2.2 + rng() * 1.4, 8, 6), treeTopMat);
+      top.position.set(tx, gy + 4.4, tz);
+      top.castShadow = true;
+      grp.add(top);
+    }
+    scene.add(grp);
   }
 
-  return { water, clouds, smokePuffs, update };
+  // ---- Runway on Karimbu ----
+  const rw = new THREE.Group();
+  rw.position.set(RUNWAY.x, RUNWAY.alt, RUNWAY.z);
+  const strip = new THREE.Mesh(
+    new THREE.BoxGeometry(RUNWAY.w, 0.4, RUNWAY.len),
+    new THREE.MeshLambertMaterial({ color: 0x3d3d44 })
+  );
+  strip.receiveShadow = true;
+  rw.add(strip);
+  const dashMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  for (let i = -4; i <= 4; i++) {
+    const dash = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 8), dashMat);
+    dash.position.set(0, 0.25, i * 22);
+    rw.add(dash);
+  }
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 3; i++) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(5, 0.1, 1.6), dashMat);
+      bar.position.set(side * 4.5, 0.25, -RUNWAY.len / 2 + 8 + i * 3);
+      rw.add(bar);
+      const bar2 = bar.clone();
+      bar2.position.z = RUNWAY.len / 2 - 8 - i * 3;
+      rw.add(bar2);
+    }
+  }
+  scene.add(rw);
+
+  // ---- 40 instanced low-poly clouds (puffs of 3-5 flattened spheres) ----
+  const puffGeo = new THREE.SphereGeometry(1, 8, 6);
+  // Emissive keeps the clouds bright at golden hour instead of near-black
+  // on their shaded side (the sun is very low).
+  const cloudMat = new THREE.MeshLambertMaterial({ color: 0xfff2e0, emissive: 0x8a7a66, transparent: true, opacity: 0.85 });
+  const inst = new THREE.InstancedMesh(puffGeo, cloudMat, 40 * 5);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  let idx = 0;
+  for (let i = 0; i < 40; i++) {
+    const cx = (rng() - 0.5) * 2800;
+    const cz = (rng() - 0.5) * 2800;
+    const cy = 180 + rng() * 140;
+    const puffs = 3 + Math.floor(rng() * 3);
+    const cloud = { x: cx, y: cy, z: cz, speed: 1.5 + rng() * 2, puffs: [] };
+    for (let p = 0; p < puffs; p++) {
+      const ox = (rng() - 0.5) * 34;
+      const oy = (rng() - 0.5) * 6;
+      const oz = (rng() - 0.5) * 18;
+      const s = 10 + rng() * 12;
+      cloud.puffs.push({ ox, oy, oz, s, idx });
+      m.compose(new THREE.Vector3(cx + ox, cy + oy, cz + oz), q, new THREE.Vector3(s, s * 0.45, s * 0.8));
+      inst.setMatrixAt(idx, m);
+      idx++;
+    }
+    out.clouds.push(cloud);
+  }
+  inst.count = idx;
+  inst.instanceMatrix.needsUpdate = true;
+  scene.add(inst);
+  out.cloudInst = inst;
+
+  return out;
+}
+
+// Per-frame world animation: water waves, drifting clouds, volcano smoke.
+export function animateTerrain(world, t, dt) {
+  const pos = world.waterGeo.attributes.position;
+  const base = world.waterBase;
+  for (let i = 0; i < pos.count; i++) {
+    const bx = base[i * 3], bz = base[i * 3 + 2];
+    pos.array[i * 3 + 1] = Math.sin(bx * 0.012 + t * 0.9) * 0.55 + Math.cos(bz * 0.01 + t * 0.7) * 0.55;
+  }
+  pos.needsUpdate = true;
+  // Normals are the expensive part (8k triangles); recompute every 6th frame.
+  world._normTick = (world._normTick || 0) + 1;
+  if (world._normTick % 6 === 0) world.waterGeo.computeVertexNormals();
+
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  for (const c of world.clouds) {
+    c.x += c.speed * dt;
+    if (c.x > 1500) c.x = -1500;
+    for (const p of c.puffs) {
+      m.compose(new THREE.Vector3(c.x + p.ox, c.y + p.oy, c.z + p.oz), q, new THREE.Vector3(p.s, p.s * 0.45, p.s * 0.8));
+      world.cloudInst.setMatrixAt(p.idx, m);
+    }
+  }
+  world.cloudInst.instanceMatrix.needsUpdate = true;
+
+  for (const puff of world.smoke) {
+    const s = 1 + 0.25 * Math.sin(t * 1.3 + puff.userData.phase);
+    puff.scale.set(s, s, s);
+  }
 }

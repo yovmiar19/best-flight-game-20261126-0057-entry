@@ -1,130 +1,141 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Island Hopper — 3D Flight Game</title>
-<link rel="icon" href="data:,">
-<style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a2b3c;
-    font-family: "Trebuchet MS", Verdana, sans-serif; }
-  #scene { position: fixed; inset: 0; }
-  #scene canvas { display: block; }
-  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff;
-    text-shadow: 0 1px 3px rgba(0,0,0,.7); }
-  .panel { position: absolute; top: 14px; background: rgba(8, 24, 40, .55);
-    border: 1px solid rgba(255,255,255,.25); border-radius: 10px; padding: 10px 14px;
-    backdrop-filter: blur(2px); }
-  #hud-left { left: 14px; min-width: 190px; }
-  #hud-right { right: 14px; min-width: 150px; text-align: right; }
-  .row { display: flex; justify-content: space-between; gap: 14px; margin: 3px 0;
-    font-size: 15px; letter-spacing: .04em; }
-  .row span { opacity: .75; font-size: 12px; padding-top: 2px; }
-  .row b { font-size: 17px; }
-  .bar { width: 110px; height: 10px; background: rgba(255,255,255,.25);
-    border-radius: 5px; overflow: hidden; margin-top: 4px; }
-  .bar i { display: block; height: 100%; background: #4dd0e1; width: 0%; }
-  .bar.fuel i { background: #ffb300; }
-  .bar.fuel.low i { background: #ff5252; }
-  #hud-mission { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
-    background: rgba(8, 24, 40, .55); border: 1px solid rgba(255,255,255,.25);
-    border-radius: 20px; padding: 7px 18px; font-size: 14px; white-space: nowrap; }
-  #hud-guide { position: absolute; top: 58px; left: 50%; transform: translateX(-50%);
-    background: rgba(8, 24, 40, .55); border: 1px solid rgba(255,179,0,.6);
-    border-radius: 20px; padding: 5px 16px; font-size: 14px; white-space: nowrap; }
-  #hud-arrow { display: inline-block; color: #ffb300; font-size: 16px; margin-right: 8px; }
-  #hud-minimap { position: absolute; right: 14px; bottom: 14px; width: 150px; height: 150px;
-    border: 1px solid rgba(255,255,255,.25); border-radius: 10px; }
-  #hud-warn { position: absolute; top: 100px; left: 50%; transform: translateX(-50%);
-    color: #ff8a80; font-weight: bold; font-size: 16px; display: none;
-    background: rgba(60,0,0,.5); border-radius: 8px; padding: 5px 14px; }
-  #hud-banner { position: absolute; top: 34%; left: 50%; transform: translate(-50%, -50%) scale(.9);
-    font-size: 34px; font-weight: bold; color: #fff; opacity: 0; transition: opacity .25s, transform .25s;
-    text-align: center; text-shadow: 0 2px 10px rgba(0,0,0,.8); white-space: nowrap; }
-  #hud-banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  #hud-banner.good { color: #a5f2a5; }
-  #hud-banner.bad { color: #ff9a9a; }
-  #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(180deg, rgba(10,20,40,.55), rgba(10,20,40,.82)); z-index: 10; }
-  #overlay.hidden { display: none; }
-  #overlay.crash-tint { background: linear-gradient(180deg, rgba(80,0,0,.55), rgba(60,0,0,.85)); }
-  .card.hidden { display: none; }
-  .card .big { font-size: 60px; margin: 0 0 4px; letter-spacing: .06em; color: #ffb300; }
-  .card .press { font-size: 20px; font-weight: bold; color: #4dd0e1; margin-top: 18px;
-    animation: blink 1.2s steps(2) infinite; }
-  @keyframes blink { 50% { opacity: .25; } }
-  .card .stats { text-align: left; display: inline-block; font-size: 16px; line-height: 2;
-    background: rgba(255,255,255,.08); border-radius: 10px; padding: 12px 22px; margin: 12px 0 18px; }
-  .card .stats span { opacity: .75; font-size: 13px; margin-right: 14px; }
-  .card .stats b { font-size: 18px; }
-  .medal { font-size: 26px; font-weight: bold; margin: 4px 0 0; }
-  .medal.gold { color: #ffd54f; }
-  .medal.silver { color: #cfd8dc; }
-  .medal.bronze { color: #d89b6a; }
-  .card.crash h1 { color: #ff5252; }
-  .card.crash .count { font-size: 20px; font-weight: bold; color: #ffca28; margin-top: 14px; }
-  .card { text-align: center; color: #fff; max-width: 560px; padding: 30px 40px;
-    background: rgba(8, 24, 40, .72); border: 1px solid rgba(255,255,255,.3); border-radius: 16px; }
-  .card h1 { margin: 0 0 4px; font-size: 46px; letter-spacing: .06em; color: #ffb300; }
-  .card h2 { margin: 0 0 16px; font-size: 16px; font-weight: normal; opacity: .85; }
-  .card p { font-size: 15px; line-height: 1.55; margin: 8px 0; }
-  .card .controls { text-align: left; display: inline-block; font-size: 14px; line-height: 1.8;
-    background: rgba(255,255,255,.08); border-radius: 10px; padding: 10px 18px; margin: 10px 0 18px; }
-  .card .controls b { color: #4dd0e1; }
-  #fly-button, #again-button { font-size: 20px; font-weight: bold; padding: 12px 34px; border: 0; border-radius: 30px;
-    background: #ffb300; color: #3e2700; cursor: pointer; letter-spacing: .05em; }
-  #fly-button:hover, #again-button:hover { background: #ffca28; }
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-</style>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 4 L40 26 L60 30 L40 34 L36 58 L32 44 L28 58 L24 34 L4 30 L24 26 Z' fill='%238a9ba8'/%3E%3C/svg%3E">
 <script type="importmap">
 { "imports": { "three": "./vendor/three.min.js" } }
 </script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a2233; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
+  #scene { position: fixed; inset: 0; display: block; touch-action: none; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  .hud-left { position: absolute; left: 14px; top: 12px; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+  .hud-left .big { font-size: 30px; font-weight: 800; line-height: 1.1; }
+  .hud-left .sub { font-size: 15px; font-weight: 600; opacity: .9; }
+  .fuel-wrap { margin-top: 8px; width: 170px; height: 12px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.5); border-radius: 6px; overflow: hidden; }
+  .fuel-wrap .fill { height: 100%; width: 100%; background: linear-gradient(90deg, #22c55e, #84cc16); transition: width .2s; }
+  .fuel-wrap .fill.low { background: linear-gradient(90deg, #ef4444, #f97316); }
+  .fuel-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; margin-top: 3px; opacity: .85; }
+  .hud-right { position: absolute; right: 14px; top: 12px; text-align: right; text-shadow: 0 1px 4px rgba(0,0,0,.7); font-weight: 800; font-size: 17px; line-height: 1.5; }
+  #hud-objective { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font-size: 16px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.8); background: rgba(0,0,0,.35); padding: 6px 14px; border-radius: 20px; white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis; }
+  #hud-guide { position: absolute; left: 50%; top: 58%; transform: translateX(-50%); text-align: center; }
+  #hud-guide .arrow { font-size: 44px; line-height: 1; text-shadow: 0 0 12px rgba(255,215,0,.9); color: #ffd700; display: inline-block; transition: transform .1s linear; }
+  #hud-guide-dist { font-size: 15px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.8); }
+  #hud-warn { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); font-size: 24px; font-weight: 900; color: #ff5252; text-shadow: 0 0 14px rgba(255,0,0,.7); display: none; letter-spacing: 1px; }
+  #hud-banner { position: absolute; left: 50%; top: 34%; transform: translate(-50%,-50%) scale(.9); font-size: 34px; font-weight: 900; color: #ffd700; text-shadow: 0 2px 10px rgba(0,0,0,.8); opacity: 0; transition: opacity .15s, transform .15s; white-space: nowrap; }
+  #hud-banner.show { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+  #hud-minimap { position: absolute; right: 14px; bottom: 14px; width: 150px; height: 150px; border: 2px solid rgba(255,255,255,.6); border-radius: 8px; background: rgba(10,30,50,.6); }
+  #hud-mute { position: absolute; left: 14px; bottom: 14px; font-size: 12px; font-weight: 700; opacity: .8; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  #hud-vignette { position: fixed; inset: 0; pointer-events: none; z-index: 4; opacity: 0; box-shadow: inset 0 0 90px 30px rgba(255,0,0,.55); }
+  #overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-start; justify-content: center; padding-top: 8vh; background: rgba(5,10,25,.45); }
+  .card { display: none; max-width: 520px; width: calc(100vw - 32px); background: rgba(8,16,32,.88); border: 1px solid rgba(255,255,255,.25); border-radius: 16px; padding: 26px 28px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  .card h1 { font-size: 40px; letter-spacing: 1px; margin-bottom: 6px; }
+  .card h1 .gold { color: #ffd700; }
+  .card h2 { font-size: 26px; margin-bottom: 10px; }
+  .card p { font-size: 15px; line-height: 1.55; opacity: .92; margin-bottom: 10px; }
+  .card .keys { font-size: 13px; line-height: 1.9; background: rgba(255,255,255,.08); border-radius: 10px; padding: 10px 14px; margin: 12px 0; text-align: left; }
+  .card .keys b { color: #ffd700; }
+  .btn { pointer-events: auto; cursor: pointer; display: inline-block; margin-top: 8px; padding: 12px 30px; font-size: 17px; font-weight: 800; color: #1a1200; background: linear-gradient(180deg, #ffe066, #ffb020); border: none; border-radius: 30px; box-shadow: 0 4px 16px rgba(255,176,32,.5); }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: rgba(255,255,255,.15); color: #fff; box-shadow: none; margin-left: 8px; }
+  .blink { animation: blink 1.2s infinite; font-weight: 800; letter-spacing: 1px; }
+  @keyframes blink { 50% { opacity: .25; } }
+  .res-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; text-align: left; font-size: 15px; margin: 12px 0; }
+  .res-grid b { float: right; color: #ffd700; }
+  #res-stars { font-size: 34px; color: #ffd700; letter-spacing: 6px; margin: 4px 0; }
+  #res-medal { font-size: 22px; font-weight: 900; color: #ffd700; }
+  #card-crash { border-color: rgba(255,60,60,.6); }
+  #card-crash h2 { color: #ff6b6b; }
+  .crash-countdown { font-size: 18px; font-weight: 800; color: #ffd700; margin-top: 8px; }
+  #touch-controls { display: none; position: fixed; inset: 0; z-index: 6; pointer-events: none; }
+  #touch-stick { position: absolute; left: 18px; bottom: 70px; width: 120px; height: 120px; border-radius: 50%; background: rgba(255,255,255,.12); border: 2px solid rgba(255,255,255,.4); pointer-events: auto; }
+  #touch-knob { position: absolute; left: 38px; top: 38px; width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,.55); }
+  #touch-throttle { position: absolute; right: 18px; bottom: 70px; width: 44px; height: 180px; background: rgba(255,255,255,.12); border: 2px solid rgba(255,255,255,.4); border-radius: 22px; pointer-events: auto; overflow: hidden; }
+  #touch-throttle-fill { position: absolute; bottom: 0; left: 0; width: 100%; height: 70%; background: linear-gradient(180deg, #ffd700, #ff7a00); }
+  #status { position: fixed; left: -9999px; }
+  @media (max-width: 640px) {
+    .hud-left .big { font-size: 22px; }
+    #hud-objective { font-size: 13px; top: 8px; }
+    .hud-right { font-size: 14px; }
+    #hud-minimap { width: 110px; height: 110px; }
+    #hud-banner { font-size: 24px; }
+    .card h1 { font-size: 30px; }
+  }
+</style>
 </head>
 <body>
-<div id="scene" aria-label="Island Hopper: fly a prop plane through 8 rings over a tropical island chain"></div>
-<div id="hud"></div>
+<div id="hud-vignette"></div>
+<div id="hud">
+  <div class="hud-left">
+    <div class="big" id="hud-spd">0 km/h</div>
+    <div class="sub" id="hud-alt">0 m</div>
+    <div class="fuel-wrap"><div class="fill" id="hud-fuel-fill"></div></div>
+    <div class="fuel-label">FUEL</div>
+  </div>
+  <div class="hud-right">
+    <div id="hud-score">SCORE 0</div>
+    <div id="hud-rings">RINGS 0/8</div>
+    <div id="hud-time">TIME 0:00</div>
+  </div>
+  <div id="hud-objective">Fly through 8 rings in order, then land on Karimbu</div>
+  <div id="hud-guide"><div class="arrow" id="hud-guide-arrow">➤</div><div id="hud-guide-dist"></div></div>
+  <div id="hud-warn"></div>
+  <div id="hud-banner"></div>
+  <canvas id="hud-minimap" width="150" height="150"></canvas>
+  <div id="hud-mute">M — SOUND ON</div>
+</div>
+
+<div id="touch-controls">
+  <div id="touch-stick"><div id="touch-knob"></div></div>
+  <div id="touch-throttle"><div id="touch-throttle-fill"></div></div>
+</div>
+
 <div id="overlay">
-  <div class="card hidden" id="title-card">
-    <h1 class="big">ISLAND HOPPER</h1>
-    <h2>Fly the island chain — 8 rings, one runway, a full tank of nerve.</h2>
-    <p>Sunset over the islands. Your plane is fuelled and waiting on the runway.</p>
-    <p class="press">PRESS SPACE TO TAKE OFF</p>
+  <div class="card" id="card-title">
+    <h1>ISLAND <span class="gold">HOPPER</span></h1>
+    <p>Fly the F-14D Tomcat through 8 golden rings across the islands, then land on Karimbu.</p>
+    <p class="blink">PRESS ANY KEY / TAP TO FLY</p>
+    <p style="font-size:13px;opacity:.75">Arrows pitch &amp; bank · W/S throttle · R reset · M mute · drag to look</p>
   </div>
-  <div class="card hidden" id="briefing-card">
-    <h1>ISLAND HOPPER</h1>
-    <h2>Fly the island chain — 8 rings, one runway, a full tank of nerve.</h2>
-    <p>Take off from Pulau Karimbu, thread all <b>8 glowing rings in order</b> over the islands, and land back on the runway to refuel and repair. Rings pay more in a row — ring 8 pays <b>+800</b>. Grab the amber fuel canisters over Pulau Solmar and Pulau Nusa. Watch your fuel: empty tanks mean gliding. Three hard hits and you crash — but your score survives.</p>
-    <div class="controls">
-      <b>↑ / ↓</b> pitch (climb / dive) &nbsp;·&nbsp; <b>← / →</b> bank &amp; turn<br>
+  <div class="card" id="card-briefing">
+    <h2>MISSION BRIEFING</h2>
+    <p>Fly through <b>8 rings in order</b>, then land on the Karimbu runway. Each ring pays <b>100 × combo</b> and refills <b>+15% fuel</b>. Grab fuel canisters (+45%). A butter landing pays <b>+500</b>.</p>
+    <div class="keys">
+      <b>↑ / ↓</b> pitch &nbsp;·&nbsp; <b>← / →</b> bank &amp; turn<br>
       <b>W / S</b> throttle up / down &nbsp;·&nbsp; <b>R</b> reset to runway<br>
-      <b>Mouse drag</b> look around (resets on release)
+      <b>M</b> mute &nbsp;·&nbsp; <b>Mouse drag</b> look around<br>
+      <b>Touch</b> left stick + right throttle slider &nbsp;·&nbsp; <b>Gamepad</b> left stick
     </div>
-    <br>
-    <button id="fly-button">✈ &nbsp;CLICK TO FLY</button>
-    <p style="font-size:13px; opacity:.75">Stall below 55 km/h — keep the speed up. Gentle landings only.</p>
+    <button class="btn" id="btn-fly">FLY ✈</button>
   </div>
-  <div class="card hidden" id="results-card">
-    <h1>🏆 MISSION COMPLETE</h1>
-    <h2>All 8 rings flown — welcome home, pilot.</h2>
-    <div class="stats">
-      <span>TIME</span><b id="res-time">0:00</b><br>
-      <span>RINGS</span><b id="res-rings">8 / 8</b><br>
-      <span>FUEL LEFT</span><b id="res-fuel">0%</b><br>
-      <span>LANDING</span><b id="res-landing">—</b><br>
-      <span>SCORE</span><b id="res-score">0</b>
+  <div class="card" id="card-crash">
+    <h2 id="crash-text">Crashed!</h2>
+    <p id="crash-count">Hits 1/3</p>
+    <p class="crash-countdown">Respawning in 3…</p>
+  </div>
+  <div class="card" id="card-results">
+    <h2>MISSION COMPLETE</h2>
+    <div id="res-stars">★★★</div>
+    <div id="res-medal">GOLD</div>
+    <div class="res-grid">
+      <div>Time <b id="res-time">0:00</b></div>
+      <div>Rings <b id="res-rings">8/8</b></div>
+      <div>Fuel <b id="res-fuel">100%</b></div>
+      <div>Landing <b id="res-grade">BUTTER</b></div>
+      <div>Score <b id="res-score">0</b></div>
+      <div>Best <b id="res-best">BEST —</b></div>
     </div>
-    <p class="medal gold" id="res-medal">🏅 GOLD MEDAL</p>
-    <br>
-    <button id="again-button">✈ &nbsp;FLY AGAIN</button>
-  </div>
-  <div class="card crash hidden" id="crash-card">
-    <h1>💥 AIRFRAME FAILURE</h1>
-    <h2 id="crash-hits">3/3 hits — the island claims another plane.</h2>
-    <p>Your score and rings are safe. The ground crew is already rolling out a fresh plane.</p>
-    <p class="count" id="crash-count">Respawning in 3…</p>
+    <button class="btn" id="btn-again">FLY AGAIN</button>
+    <button class="btn ghost" id="btn-title">TITLE</button>
+    <p style="margin-top:10px;font-size:13px;opacity:.8">Press <b>R</b> to retry instantly</p>
   </div>
 </div>
-<p id="status" role="status" aria-live="polite"></p>
+
+<div id="status" aria-live="polite"></div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

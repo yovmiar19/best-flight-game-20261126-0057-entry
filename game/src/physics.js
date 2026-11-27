@@ -1,186 +1,233 @@
-// physics.js — the arcade flight model: throttle, lift, stall, fuel, damage, crashes.
-// One clear job: move the plane's state forward one step, with no rendering in it.
-
+// physics.js — Island Hopper flight model (polish spec §3).
+// MAX_SPEED 62, TAKEOFF 18, STALL 12 (forgiving), FUEL_DRAIN 0.30 %/s at full
+// throttle, ring pass +15% fuel, air start + air respawn with 2 s invulnerability.
 import * as THREE from 'three';
-import { groundHeightAt, overRunway, RUNWAY } from './terrain.js';
+import { MAX_SPEED } from './plane.js';
+import { RUNWAY, groundHeightAt, overRunway } from './terrain.js';
 
-export const MAX_SPEED = 62; // m/s at full throttle (~223 km/h)
-export const STALL_SPEED = 15; // m/s — below this the nose drops
-export const TAKEOFF_SPEED = 18; // m/s — wheels leave the runway
-export const FUEL_DRAIN = 0.45; // % per second at full throttle
-export const CRASH_PENALTY_SECONDS = 30;
+export const TAKEOFF_SPEED = 18;
+export const STALL_SPEED = 12;
+export const FUEL_DRAIN = 0.30;
+export const WORLD_RADIUS = 1500;
+export const MAX_ALT = 420;
 
-/** Fresh flight state, parked at the south end of the runway, facing north. */
-export function freshState() {
-  return {
-    pos: new THREE.Vector3(RUNWAY.x, RUNWAY.altitude + 1.6, RUNWAY.z + RUNWAY.length / 2 - 12),
-    heading: 0,
-    pitch: 0,
-    roll: 0,
-    speed: 0,
-    throttle: 0,
-    fuel: 100,
-    damage: 0,
-    score: 0,
-    ringsFlown: 0,
-    vy: 0,
-    onGround: true,
-    stalled: false,
-    time: 0,
-    crashed: false,
-    landed: false,
-    lastLanding: null,
-    airTime: 0,
-    message: '',
-    messageUntil: 0,
+export function headingToRing(pos, ring) {
+  const rx = ring.pos ? ring.pos.x : ring.x;
+  const rz = ring.pos ? ring.pos.z : ring.z;
+  return Math.atan2(rx - pos.x, -(rz - pos.z));
+}
+
+// Fresh state: START IN THE AIR — altitude 55, speed 45, throttle 0.7,
+// heading toward ring 1, onGround false, airTime 0.
+export function createState(ring1) {
+  const state = {
+    pos: new THREE.Vector3(0, 55, 200),
+    heading: 0, pitch: 0, roll: 0,
+    speed: 45, throttle: 0.7,
+    fuel: 100, score: 0, ringsFlown: 0, combo: 0,
+    damage: 0, airTime: 0, time: 0,
+    onGround: false, invuln: 0, crashed: false, landed: false,
+    grade: null, vy: 0, stallWarn: false,
   };
+  if (ring1) state.heading = headingToRing(state.pos, ring1);
+  return state;
 }
 
-/** Forward direction from heading (0 = north, -Z). */
-export function forwardOf(heading) {
-  return new THREE.Vector3(-Math.sin(heading), 0, -Math.cos(heading));
+// Parked on the runway (R / reset target).
+export function resetToRunway(state) {
+  state.pos.set(RUNWAY.x, RUNWAY.alt + 1.2, RUNWAY.z + 100);
+  state.heading = 0; // forward (0,0,-1) = north, along the runway
+  state.pitch = 0; state.roll = 0;
+  state.speed = 0; state.throttle = 0;
+  state.onGround = true; state.airTime = 0; state.vy = 0;
+  state.invuln = 0; state.crashed = false;
 }
 
-/**
- * Advance the flight state by dt seconds.
- * input: { pitchUp, pitchDown, bankLeft, bankRight, throttleUp, throttleDown }
- * Returns an event string ('takeoff' | 'landed' | 'hard-landing' | 'crash' | '').
- */
-export function stepFlight(state, input, dt) {
-  let event = '';
+// Respawn IN THE AIR after a crash: altitude 60, speed 40, facing next ring,
+// 2 s invulnerability. Score, rings and time are kept.
+export function respawnInAir(state, nextRing) {
+  state.pos.set(0, 60, 200);
+  if (nextRing) {
+    // Position behind the next ring so the player flies straight at it.
+    const rx = nextRing.pos ? nextRing.pos.x : nextRing.x;
+    const rz = nextRing.pos ? nextRing.pos.z : nextRing.z;
+    const dx = rx, dz = rz;
+    const d = Math.hypot(dx, dz) || 1;
+    state.pos.set(dx - (dx / d) * 220, 60, dz - (dz / d) * 220);
+    state.heading = headingToRing(state.pos, nextRing);
+  }
+  state.pitch = 0; state.roll = 0;
+  state.speed = 40; state.throttle = 0.7;
+  state.onGround = false; state.airTime = 0; state.vy = 0;
+  state.invuln = 2; state.crashed = false;
+}
+
+// Step the flight model one frame. Returns an array of events:
+// {type:'ring', index} {type:'canister', index} {type:'land', grade}
+// {type:'crash', reason} {type:'takeoff'}
+export function stepPhysics(state, input, dt, ctx) {
+  const events = [];
+  const { rings, canisters } = ctx;
+
+  if (state.crashed || state.landed) return events;
+
   state.time += dt;
+  if (state.invuln > 0) state.invuln -= dt;
 
-  // Throttle.
-  if (input.throttleUp) state.throttle = Math.min(1, state.throttle + dt * 0.55);
-  if (input.throttleDown) state.throttle = Math.max(0, state.throttle - dt * 0.7);
+  // ---- Throttle ----
+  if (input.throttleUp) state.throttle = Math.min(1, state.throttle + dt * 0.5);
+  if (input.throttleDown) state.throttle = Math.max(0, state.throttle - dt * 0.5);
+  if (input.throttleSet != null) state.throttle = Math.max(0, Math.min(1, input.throttleSet));
+  if (state.fuel <= 0) state.throttle = 0;
 
-  // Fuel: drains with throttle; empty tank forces a glide.
-  if (state.fuel > 0) {
-    state.fuel = Math.max(0, state.fuel - state.throttle * FUEL_DRAIN * dt);
-    if (state.fuel === 0) state.throttle = 0;
-  }
-
-  // Speed chases the throttle setting.
-  const targetSpeed = state.throttle * MAX_SPEED;
-  state.speed += (targetSpeed - state.speed) * Math.min(1, dt * 0.55);
-
-  // Pitch: ArrowUp climbs, ArrowDown descends. Bank: arrows turn the plane.
-  const pitchTarget = (input.pitchUp ? 0.32 : 0) + (input.pitchDown ? -0.28 : 0);
-  const rollTarget = (input.bankLeft ? 0.85 : 0) + (input.bankRight ? -0.85 : 0);
-  const steer = Math.min(1, dt * 3.2);
-  state.pitch += (pitchTarget - state.pitch) * steer;
-  state.roll += (rollTarget - state.roll) * steer;
-
-  // Turning: bank tilts the lift vector, so heading follows the roll.
-  state.heading += -state.roll * (state.speed / MAX_SPEED) * dt * 0.85;
-
-  // Stall: below minimum speed the wing stops lifting and the nose drops.
-  state.stalled = !state.onGround && state.speed < STALL_SPEED;
-  if (state.stalled) {
-    state.pitch = Math.max(-0.5, state.pitch - dt * 0.6);
-  }
-
-  // Vertical speed from pitch and speed (lift), gravity when stalled or slow.
-  if (state.onGround) {
-    state.vy = 0;
-  } else if (state.speed > STALL_SPEED) {
-    state.vy = Math.sin(state.pitch) * state.speed * 0.92;
+  // ---- Pitch / roll with gentle auto-level ----
+  const PITCH_RATE = 1.2, ROLL_RATE = 1.8, LEVEL_RATE = 1.2;
+  if (input.pitch !== 0) {
+    state.pitch += input.pitch * PITCH_RATE * dt;
   } else {
-    state.vy = Math.max(-9, state.vy - dt * 14);
+    state.pitch += (0 - state.pitch) * Math.min(1, LEVEL_RATE * dt);
+  }
+  if (input.bank !== 0) {
+    state.roll += input.bank * ROLL_RATE * dt;
+  } else {
+    state.roll += (0 - state.roll) * Math.min(1, LEVEL_RATE * dt);
+  }
+  state.pitch = Math.max(-0.6, Math.min(0.6, state.pitch));
+  state.roll = Math.max(-1.1, Math.min(1.1, state.roll));
+
+  // ---- Banking turns the plane (factor 1.0) ----
+  const speedFrac = Math.max(0, state.speed / MAX_SPEED);
+  state.heading += state.roll * 1.0 * (0.35 + 0.65 * speedFrac) * dt;
+
+  // ---- Speed ----
+  const targetSpeed = state.throttle * MAX_SPEED;
+  const climbBleed = state.pitch > 0 ? state.pitch * 6 : 0;
+  const desired = Math.max(0, targetSpeed - climbBleed);
+  const accel = desired > state.speed ? 9 : 7;
+  state.speed += Math.max(-accel * dt, Math.min(accel * dt, desired - state.speed));
+
+  // ---- Stall: gentle nose-drop (0.3/s), altitude falls ----
+  const stalled = !state.onGround && state.speed < STALL_SPEED;
+  state.stallWarn = stalled;
+  if (stalled) {
+    state.pitch -= 0.3 * dt;
+    state.pitch = Math.max(-0.6, state.pitch);
   }
 
-  // Move.
-  const forward = forwardOf(state.heading);
-  state.pos.x += forward.x * state.speed * dt;
-  state.pos.z += forward.z * state.speed * dt;
-  state.pos.y += state.vy * dt;
+  // ---- Integrate position ----
+  const fwd = new THREE.Vector3(
+    Math.sin(state.heading) * Math.cos(state.pitch),
+    Math.sin(state.pitch),
+    -Math.cos(state.heading) * Math.cos(state.pitch)
+  );
+  const prevY = state.pos.y;
+  state.pos.addScaledVector(fwd, state.speed * dt);
+  state.vy = (state.pos.y - prevY) / Math.max(dt, 1e-6);
 
-  // Keep the plane inside the world.
-  const R = 1500;
-  const dist = Math.hypot(state.pos.x, state.pos.z);
-  if (dist > R) {
-    state.pos.x *= R / dist;
-    state.pos.z *= R / dist;
-    state.heading += Math.PI;
+  // ---- World bounds: steer back toward the centre ----
+  const distC = Math.hypot(state.pos.x, state.pos.z);
+  if (distC > WORLD_RADIUS) {
+    state.heading = Math.atan2(-state.pos.x, state.pos.z);
   }
-  if (state.pos.y > 420) {
-    state.pos.y = 420;
-    state.vy = Math.min(state.vy, 0);
+  if (state.pos.y > MAX_ALT) { state.pos.y = MAX_ALT; if (state.pitch > 0) state.pitch = 0; }
+
+  // ---- Fuel ----
+  if (!state.onGround) {
+    state.fuel -= FUEL_DRAIN * state.throttle * dt;
+    if (state.fuel < 0) state.fuel = 0;
   }
 
-  // Air time: only a real flight earns a landing bonus (stops taxi-bounce farming).
+  // ---- Air time ----
   if (!state.onGround) state.airTime += dt;
 
-  // Ground contact.
-  const ground = groundHeightAt(state.pos.x, state.pos.z);
-  if (state.pos.y <= ground + 1.6) {
-    state.pos.y = ground + 1.6;
-    if (state.onGround) {
-      // Takeoff needs lift, not just speed: the pilot must pull up (ArrowUp).
-      // Rolling fast on the runway is taxiing, not flying — no takeoff, no bounce.
-      const liftVy = Math.sin(state.pitch) * state.speed * 0.92;
-      if (state.speed >= TAKEOFF_SPEED && liftVy > 0.5) {
-        state.onGround = false;
-        state.vy = liftVy;
-        state.airTime = 0;
-        event = 'takeoff';
-      }
-    } else {
-      // Touchdown: grade it from vertical speed + alignment, then decide the outcome.
-      // BUTTER: vy >= -2.5 and level wings (+500) · FIRM: vy >= -4.5 (+200) · HARD: -1 hull.
-      // A hop under 2 s of air time is an aborted takeoff: it lands, but earns no bonus.
-      const realFlight = state.airTime > 2;
-      const hard = state.vy < -6;
-      const onStrip = overRunway(state.pos.x, state.pos.z) && Math.abs(state.roll) < 0.35;
-      if (onStrip && !hard) {
-        const aligned = Math.abs(state.roll) < 0.15;
-        if (realFlight && state.vy >= -2.5 && aligned) {
-          state.lastLanding = { grade: 'BUTTER', bonus: 500 };
-        } else if (realFlight && state.vy >= -4.5) {
-          state.lastLanding = { grade: 'FIRM', bonus: 200 };
-        } else {
-          state.lastLanding = { grade: realFlight ? 'HARD' : 'FIRM', bonus: 0 };
-          if (realFlight) state.damage += 1;
-        }
-        state.onGround = true;
-        state.vy = 0;
-        state.pitch = 0;
-        state.roll = 0;
-        event = 'landed';
-      } else if (ground > 0.5) {
-        // Rough ground: hard landing damages, a fast hit crashes.
-        state.lastLanding = { grade: 'HARD', bonus: 0 };
-        state.damage += state.speed > 30 || hard ? 2 : 1;
-        state.onGround = true;
-        state.speed *= 0.4;
-        state.vy = 0;
-        event = state.damage >= 3 ? 'crash' : 'hard-landing';
-      } else {
-        // Water.
-        state.lastLanding = { grade: 'HARD', bonus: 0 };
-        state.damage = 3;
-        event = 'crash';
-      }
+  // ---- Takeoff ----
+  if (state.onGround && state.speed >= TAKEOFF_SPEED) {
+    state.onGround = false;
+    state.airTime = 0;
+    events.push({ type: 'takeoff' });
+  }
+
+  // ---- Ring passes (ordered; only the next ring counts) ----
+  const next = rings[state.ringsFlown];
+  if (next && !next.passed) {
+    const d = state.pos.distanceTo(next.pos);
+    if (d < 14) {
+      next.passed = true;
+      state.ringsFlown++;
+      state.combo = state.ringsFlown;
+      state.score += 100 * state.ringsFlown;
+      state.fuel = Math.min(100, state.fuel + 15);
+      events.push({ type: 'ring', index: state.ringsFlown - 1, combo: state.ringsFlown });
     }
   }
 
-  // Damage cap: 3 hits = crash, respawn at the runway with the score kept.
-  if (state.damage >= 3 && event !== 'crash') event = 'crash';
-  if (event === 'crash') {
-    state.crashed = true;
-    state.time += CRASH_PENALTY_SECONDS;
+  // ---- Fuel canisters (+45%) ----
+  for (let i = 0; i < canisters.length; i++) {
+    const c = canisters[i];
+    if (c.taken) continue;
+    if (state.pos.distanceTo(c.pos) < 12) {
+      c.taken = true;
+      state.fuel = Math.min(100, state.fuel + 45);
+      events.push({ type: 'canister', index: i });
+    }
   }
 
-  return event;
-}
+  // ---- Ground / water contact ----
+  const gh = groundHeightAt(state.pos.x, state.pos.z);
+  const clearance = state.pos.y - gh;
+  if (!state.onGround && clearance <= 1.2) {
+    const onRw = overRunway(state.pos.x, state.pos.z);
+    const headingOk = Math.abs(Math.sin(state.heading)) < 0.35; // roughly north/south along runway
+    if (onRw && state.vy >= -4.5 && headingOk && state.invuln <= 0) {
+      // Landing!
+      state.onGround = true;
+      state.pos.y = RUNWAY.alt + 1.2;
+      state.speed = Math.max(0, state.speed * 0.4);
+      state.pitch = 0; state.roll = 0;
+      // Aligned = wings near level and heading roughly along the runway (north/south).
+      const aligned = Math.abs(state.roll) < 0.35 && headingOk;
+      let grade = 'HARD';
+      if (state.vy >= -2.5 && aligned && state.airTime > 2) grade = 'BUTTER';
+      else if (state.vy >= -4.5) grade = 'FIRM';
+      state.grade = grade;
+      if (grade === 'BUTTER') state.score += 500;
+      else if (grade === 'FIRM') state.score += 200;
+      if (grade === 'HARD') {
+        state.damage += 1;
+        if (state.damage >= 3) {
+          state.time += 30;
+          events.push({ type: 'crash', reason: 'hard-landing' });
+          return events;
+        }
+      }
+      if (grade === 'BUTTER' || grade === 'FIRM') {
+        state.fuel = 100;
+        state.damage = 0; // refuel + repair on a good landing
+      }
+      events.push({ type: 'land', grade });
+      if (state.ringsFlown >= 8) {
+        state.landed = true;
+        events.push({ type: 'finish' });
+      }
+    } else if (state.invuln > 0) {
+      // Bounce off harmlessly during invulnerability
+      state.pos.y = gh + 1.3;
+      if (state.vy < 0) state.pitch = 0.1;
+    } else {
+      // Crash: terrain or water. Counts as a hit toward the 3-hit limit.
+      const reason = gh <= 0.5 ? 'water' : 'terrain';
+      state.damage += 1;
+      state.time += 30;
+      events.push({ type: 'crash', reason });
+    }
+  }
 
-/** Put the plane back at the runway start after a crash. Score and rings are kept. */
-export function respawnAtRunway(state) {
-  const kept = { score: state.score, ringsFlown: state.ringsFlown, time: state.time };
-  const fresh = freshState();
-  fresh.score = kept.score;
-  fresh.ringsFlown = kept.ringsFlown;
-  fresh.time = kept.time;
-  Object.assign(state, fresh);
-  state.crashed = false;
+  // ---- Rolling on the runway: friction + steering ----
+  if (state.onGround) {
+    state.speed = Math.max(0, state.speed - 4 * dt);
+    if (state.speed < 0.5) state.speed = 0;
+    state.pos.y = RUNWAY.alt + 1.2;
+  }
+
+  return events;
 }
