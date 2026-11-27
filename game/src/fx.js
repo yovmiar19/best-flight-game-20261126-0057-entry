@@ -1,149 +1,136 @@
-// fx.js — Particle bursts, wingtip contrails, wind streaks, glow sprites.
-// Fresh write from polish-spec.md §5 + §6.
-import * as THREE from 'three';
+// fx.js — Island Hopper v3: particle burst, wind streaks, wingtip trails, spec §2.6.
+// No FOV punch anywhere (that was POV, discarded in v3).
 
-export function makeGlowTexture(inner, outer) {
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const g = c.getContext('2d');
-  const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
-  grad.addColorStop(0, inner);
-  grad.addColorStop(1, outer);
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(c);
-}
+const THREE = window.THREE;
 
-// ---- Particle burst pool (ring pass) ----
-export function createBursts(scene) {
-  const pool = [];
-  for (let i = 0; i < 6; i++) {
-    const geo = new THREE.BufferGeometry();
-    const N = 60;
-    const posArr = new Float32Array(N * 3);
-    geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-    const mat = new THREE.PointsMaterial({
-      color: 0xffd700, size: 1.6, transparent: true, opacity: 0,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    });
-    const pts = new THREE.Points(geo, mat);
-    pts.visible = false;
-    scene.add(pts);
-    pool.push({ pts, vel: new Float32Array(N * 3), life: 0, N });
-  }
-  let next = 0;
-  return {
-    burst(pos, color) {
-      const b = pool[next++ % pool.length];
-      const arr = b.pts.geometry.attributes.position.array;
-      for (let i = 0; i < b.N; i++) {
-        arr[i * 3] = pos.x; arr[i * 3 + 1] = pos.y; arr[i * 3 + 2] = pos.z;
-        const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
-        const sp = 12 + Math.random() * 18;
-        b.vel[i * 3] = Math.sin(ph) * Math.cos(th) * sp;
-        b.vel[i * 3 + 1] = Math.cos(ph) * sp;
-        b.vel[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * sp;
-      }
-      b.pts.geometry.attributes.position.needsUpdate = true;
-      b.pts.material.color.setHex(color || 0xffd700);
-      b.pts.material.opacity = 1;
-      b.pts.visible = true;
-      b.life = 1;
-    },
-    update(dt) {
-      for (const b of pool) {
-        if (b.life <= 0) continue;
-        b.life -= dt * 1.4;
-        if (b.life <= 0) { b.pts.visible = false; continue; }
-        const arr = b.pts.geometry.attributes.position.array;
-        for (let i = 0; i < b.N; i++) {
-          arr[i * 3] += b.vel[i * 3] * dt;
-          arr[i * 3 + 1] += b.vel[i * 3 + 1] * dt;
-          arr[i * 3 + 2] += b.vel[i * 3 + 2] * dt;
-          b.vel[i * 3 + 1] -= 6 * dt;
-        }
-        b.pts.geometry.attributes.position.needsUpdate = true;
-        b.pts.material.opacity = Math.max(0, b.life);
-      }
-    },
-  };
-}
-
-// ---- Wingtip contrails: two fading ribbons anchored at the wingtips ----
-export function createContrails(scene) {
-  const trails = [];
-  for (let i = 0; i < 2; i++) {
-    const N = 40;
-    const geo = new THREE.BufferGeometry();
-    const posArr = new Float32Array(N * 3);
-    geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-    const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45 });
-    const line = new THREE.Line(geo, mat);
-    line.frustumCulled = false;
-    scene.add(line);
-    trails.push({ line, pts: [], N });
-  }
-  return {
-    update(planeGroup, speed) {
-      for (let t = 0; t < 2; t++) {
-        const tr = trails[t];
-        const side = t === 0 ? -5.4 : 5.4;
-        const tip = new THREE.Vector3(side, 0.1, 0.4).applyMatrix4(planeGroup.matrixWorld);
-        tr.pts.unshift(tip.clone());
-        if (tr.pts.length > tr.N) tr.pts.pop();
-        const arr = tr.line.geometry.attributes.position.array;
-        for (let i = 0; i < tr.N; i++) {
-          const p = tr.pts[Math.min(i, tr.pts.length - 1)] || tip;
-          arr[i * 3] = p.x; arr[i * 3 + 1] = p.y; arr[i * 3 + 2] = p.z;
-        }
-        tr.line.geometry.attributes.position.needsUpdate = true;
-        tr.line.material.opacity = speed > 25 ? 0.45 : 0.12;
-        tr.line.visible = speed > 8;
-      }
-    },
-    reset() { for (const tr of trails) tr.pts = []; },
-  };
-}
-
-// ---- Wind streaks: ~60 short white streaks streaming past the camera ----
-export function createWindStreaks(scene) {
-  const N = 60;
+export function createFx(scene) {
+  // --- Ring burst: one reusable Points cloud, re-fired per pass ---
+  const MAXP = 220;
+  const positions = new Float32Array(MAXP * 3);
   const geo = new THREE.BufferGeometry();
-  const posArr = new Float32Array(N * 2 * 3);
-  geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-  const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
-  const lines = new THREE.LineSegments(geo, mat);
-  lines.frustumCulled = false;
-  scene.add(lines);
-  const seeds = [];
-  for (let i = 0; i < N; i++) {
-    seeds.push({
-      x: (Math.random() - 0.5) * 60, y: (Math.random() - 0.5) * 30, z: (Math.random() - 0.5) * 60,
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const burstMat = new THREE.PointsMaterial({
+    color: 0xffd166, size: 1.6, transparent: true, opacity: 0, depthWrite: false,
+  });
+  const burst = new THREE.Points(geo, burstMat);
+  burst.frustumCulled = false;
+  scene.add(burst);
+  const vel = new Float32Array(MAXP * 3);
+  let burstLife = 0;
+
+  function fireBurst(center) {
+    for (let i = 0; i < MAXP; i++) {
+      positions[i * 3] = center.x;
+      positions[i * 3 + 1] = center.y;
+      positions[i * 3 + 2] = center.z;
+      const a = Math.random() * Math.PI * 2;
+      const b = Math.random() * Math.PI - Math.PI / 2;
+      const sp = 14 + Math.random() * 26;
+      vel[i * 3] = Math.cos(a) * Math.cos(b) * sp;
+      vel[i * 3 + 1] = Math.sin(b) * sp;
+      vel[i * 3 + 2] = Math.sin(a) * Math.cos(b) * sp;
+    }
+    geo.attributes.position.needsUpdate = true;
+    burstLife = 1;
+    burstMat.opacity = 1;
+  }
+
+  // --- Wind streaks: short line segments rushing past the camera at speed ---
+  const STREAKS = 26;
+  const streakGeo = new THREE.BufferGeometry();
+  const streakPos = new Float32Array(STREAKS * 6);
+  streakGeo.setAttribute('position', new THREE.BufferAttribute(streakPos, 3));
+  const streaks = new THREE.LineSegments(
+    streakGeo,
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 }),
+  );
+  streaks.frustumCulled = false;
+  scene.add(streaks);
+  const streakData = [];
+  for (let i = 0; i < STREAKS; i++) {
+    streakData.push({
+      x: (Math.random() - 0.5) * 40, y: (Math.random() - 0.5) * 24, z: (Math.random() - 0.5) * 40,
     });
   }
+
+  // --- Wingtip trails: fading line strips behind both wingtips ---
+  const TRAIL_N = 28;
+  const trailGeoL = new THREE.BufferGeometry();
+  const trailPosL = new Float32Array(TRAIL_N * 3);
+  trailGeoL.setAttribute('position', new THREE.BufferAttribute(trailPosL, 3));
+  const trailMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 });
+  const trailL = new THREE.Line(trailGeoL, trailMat.clone());
+  const trailR = new THREE.Line(trailGeoL.clone(), trailMat.clone());
+  trailL.frustumCulled = trailR.frustumCulled = false;
+  scene.add(trailL, trailR);
+  const histL = [], histR = [];
+  for (let i = 0; i < TRAIL_N; i++) { histL.push(null); histR.push(null); }
+  let trailsSeeded = false;
+
+  function writeTrail(hist, attr) {
+    for (let i = 0; i < TRAIL_N; i++) {
+      attr.array[i * 3] = hist[i][0];
+      attr.array[i * 3 + 1] = hist[i][1];
+      attr.array[i * 3 + 2] = hist[i][2];
+    }
+    attr.needsUpdate = true;
+  }
+
   return {
-    update(camera, speed, dt) {
-      const vis = speed > 35;
-      mat.opacity = vis ? Math.min(0.5, (speed - 35) / 40) : 0;
-      if (!vis) { lines.visible = false; return; }
-      lines.visible = true;
-      const arr = geo.attributes.position.array;
-      const fwd = new THREE.Vector3();
-      camera.getWorldDirection(fwd);
-      const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
-      const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
-      const back = speed * dt * 2.2;
-      for (let i = 0; i < N; i++) {
-        const s = seeds[i];
-        s.z += back; // stream backward relative to flight
-        if (s.z > 30) { s.z = -30; s.x = (Math.random() - 0.5) * 60; s.y = (Math.random() - 0.5) * 30; }
-        const cx = camera.position.x + right.x * s.x + up.x * s.y + fwd.x * s.z;
-        const cy = camera.position.y + right.y * s.x + up.y * s.y + fwd.y * s.z;
-        const cz = camera.position.z + right.z * s.x + up.z * s.y + fwd.z * s.z;
-        arr[i * 6] = cx; arr[i * 6 + 1] = cy; arr[i * 6 + 2] = cz;
-        arr[i * 6 + 3] = cx - fwd.x * 3; arr[i * 6 + 4] = cy - fwd.y * 3; arr[i * 6 + 5] = cz - fwd.z * 3;
+    fireBurst,
+    update(state, plane, camera, dt, t) {
+      // Burst
+      if (burstLife > 0) {
+        burstLife -= dt * 1.4;
+        for (let i = 0; i < MAXP; i++) {
+          positions[i * 3] += vel[i * 3] * dt;
+          positions[i * 3 + 1] += vel[i * 3 + 1] * dt;
+          positions[i * 3 + 2] += vel[i * 3 + 2] * dt;
+          vel[i * 3 + 1] -= dt * 6;
+        }
+        geo.attributes.position.needsUpdate = true;
+        burstMat.opacity = Math.max(0, burstLife);
       }
-      geo.attributes.position.needsUpdate = true;
+      // Streaks: only at high speed, rushing from front to back past camera
+      const speedFrac = state.speed / 62;
+      const show = !state.onGround && speedFrac > 0.55;
+      streaks.material.opacity = show ? (speedFrac - 0.55) * 0.9 : 0;
+      if (show) {
+        const camPos = camera.position;
+        for (let i = 0; i < STREAKS; i++) {
+          const s = streakData[i];
+          s.z += (30 + state.speed) * dt;
+          if (s.z > 22) { s.z = -22; s.x = (Math.random() - 0.5) * 40; s.y = (Math.random() - 0.5) * 24; }
+          streakPos[i * 6] = camPos.x + s.x;
+          streakPos[i * 6 + 1] = camPos.y + s.y;
+          streakPos[i * 6 + 2] = camPos.z + s.z;
+          streakPos[i * 6 + 3] = camPos.x + s.x;
+          streakPos[i * 6 + 4] = camPos.y + s.y;
+          streakPos[i * 6 + 5] = camPos.z + s.z + 3.5;
+        }
+        streakGeo.attributes.position.needsUpdate = true;
+      }
+      // Wingtip trails: track the two wingtip world positions.
+      // Seed the history with the current tips on first use so no line is
+      // ever drawn back to the world origin.
+      const tipL = new THREE.Vector3(-5.4, 0.05, 0.2);
+      const tipR = new THREE.Vector3(5.4, 0.05, 0.2);
+      plane.group.localToWorld(tipL);
+      plane.group.localToWorld(tipR);
+      if (!trailsSeeded) {
+        for (let i = 0; i < TRAIL_N; i++) {
+          histL[i] = [tipL.x, tipL.y, tipL.z];
+          histR[i] = [tipR.x, tipR.y, tipR.z];
+        }
+        trailsSeeded = true;
+      }
+      const flying = !state.onGround && state.speed > 20;
+      histL.pop(); histL.unshift([tipL.x, tipL.y, tipL.z]);
+      histR.pop(); histR.unshift([tipR.x, tipR.y, tipR.z]);
+      writeTrail(histL, trailGeoL.attributes.position);
+      writeTrail(histR, trailR.geometry.attributes.position);
+      trailL.material.opacity = flying ? 0.35 : 0;
+      trailR.material.opacity = flying ? 0.35 : 0;
     },
   };
 }

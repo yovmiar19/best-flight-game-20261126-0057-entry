@@ -1,149 +1,150 @@
-// audio.js — WebAudio: jet engine hum, wind noise, rising chimes, music pad.
-// Fresh write from polish-spec.md §9. All audio starts only on first gesture.
+// audio.js — Island Hopper v3: WebAudio sounds, spec §2.4.
+// Engine (oscillator + filtered noise, follows throttle), wind with speed,
+// ring chime rising per combo, crash thud, landing chirp, soft pad loop.
+// Starts on first flight; M toggles mute.
+
 export function createAudio() {
-  const a = {
-    ctx: null, master: null, muted: false,
-    engineOsc: null, engineGain: null, engineFilter: null,
-    windSrc: null, windGain: null, windFilter: null,
-    musicOsc1: null, musicOsc2: null, musicGain: null, musicStarted: false,
-    started: false,
-  };
+  let ctx = null;
+  let master = null;
+  let engineOsc = null, engineOsc2 = null, engineGain = null, engineFilter = null;
+  let noiseSrc = null, noiseGain = null, windGain = null;
+  let padOsc = null, padGain = null;
+  let muted = false;
+  let started = false;
 
   function ensure() {
-    if (a.ctx) return;
+    if (ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    a.ctx = new AC();
-    a.master = a.ctx.createGain();
-    a.master.gain.value = a.muted ? 0 : 1;
-    a.master.connect(a.ctx.destination);
+    ctx = new AC();
+    master = ctx.createGain();
+    master.gain.value = muted ? 0 : 0.5;
+    master.connect(ctx.destination);
 
-    // Engine hum: sawtooth 70 Hz + lowpass 400 Hz, pitch follows throttle+speed.
-    a.engineOsc = a.ctx.createOscillator();
-    a.engineOsc.type = 'sawtooth';
-    a.engineOsc.frequency.value = 70;
-    a.engineFilter = a.ctx.createBiquadFilter();
-    a.engineFilter.type = 'lowpass';
-    a.engineFilter.frequency.value = 400;
-    a.engineGain = a.ctx.createGain();
-    a.engineGain.gain.value = 0.0;
-    a.engineOsc.connect(a.engineFilter);
-    a.engineFilter.connect(a.engineGain);
-    a.engineGain.connect(a.master);
-    a.engineOsc.start();
+    // Engine: two detuned saws through a lowpass
+    engineOsc = ctx.createOscillator();
+    engineOsc.type = 'sawtooth';
+    engineOsc.frequency.value = 55;
+    engineOsc2 = ctx.createOscillator();
+    engineOsc2.type = 'sawtooth';
+    engineOsc2.frequency.value = 58;
+    engineFilter = ctx.createBiquadFilter();
+    engineFilter.type = 'lowpass';
+    engineFilter.frequency.value = 320;
+    engineGain = ctx.createGain();
+    engineGain.gain.value = 0;
+    engineOsc.connect(engineFilter);
+    engineOsc2.connect(engineFilter);
+    engineFilter.connect(engineGain);
+    engineGain.connect(master);
+    engineOsc.start();
+    engineOsc2.start();
 
-    // Wind noise: looped filtered-noise buffer.
-    const len = a.ctx.sampleRate * 2;
-    const buf = a.ctx.createBuffer(1, len, a.ctx.sampleRate);
+    // Wind: looped filtered noise
+    const len = ctx.sampleRate * 2;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-    a.windSrc = a.ctx.createBufferSource();
-    a.windSrc.buffer = buf;
-    a.windSrc.loop = true;
-    a.windFilter = a.ctx.createBiquadFilter();
-    a.windFilter.type = 'bandpass';
-    a.windFilter.frequency.value = 900;
-    a.windFilter.Q.value = 0.6;
-    a.windGain = a.ctx.createGain();
-    a.windGain.gain.value = 0;
-    a.windSrc.connect(a.windFilter);
-    a.windFilter.connect(a.windGain);
-    a.windGain.connect(a.master);
-    a.windSrc.start();
+    noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = buf;
+    noiseSrc.loop = true;
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.value = 700;
+    noiseFilter.Q.value = 0.6;
+    windGain = ctx.createGain();
+    windGain.gain.value = 0;
+    noiseSrc.connect(noiseFilter);
+    noiseFilter.connect(windGain);
+    windGain.connect(master);
+    noiseSrc.start();
+
+    // Soft pad loop: two slow sines a fifth apart
+    padOsc = ctx.createOscillator();
+    padOsc.type = 'sine';
+    padOsc.frequency.value = 110;
+    const padOsc2 = ctx.createOscillator();
+    padOsc2.type = 'sine';
+    padOsc2.frequency.value = 164.8;
+    padGain = ctx.createGain();
+    padGain.gain.value = 0.035;
+    const padFilter = ctx.createBiquadFilter();
+    padFilter.type = 'lowpass';
+    padFilter.frequency.value = 500;
+    padOsc.connect(padFilter);
+    padOsc2.connect(padFilter);
+    padFilter.connect(padGain);
+    padGain.connect(master);
+    padOsc.start();
+    padOsc2.start();
   }
 
-  function startMusic() {
-    if (!a.ctx || a.musicStarted) return;
-    a.musicStarted = true;
-    a.musicGain = a.ctx.createGain();
-    a.musicGain.gain.value = 0.015;
-    a.musicOsc1 = a.ctx.createOscillator();
-    a.musicOsc1.type = 'triangle';
-    a.musicOsc1.frequency.value = 220;
-    a.musicOsc2 = a.ctx.createOscillator();
-    a.musicOsc2.type = 'triangle';
-    a.musicOsc2.frequency.value = 220 * 1.005; // detuned
-    a.musicOsc2.frequency.value = 277.18; // slow pad chord tone
-    a.musicOsc1.connect(a.musicGain);
-    a.musicOsc2.connect(a.musicGain);
-    a.musicGain.connect(a.master);
-    a.musicOsc1.start();
-    a.musicOsc2.start();
-  }
-
-  a.unlock = function () {
+  function start() {
     ensure();
-    if (a.ctx && a.ctx.state === 'suspended') a.ctx.resume();
-    startMusic();
-    a.started = true;
-  };
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume();
+    started = true;
+  }
 
-  // Per-frame: engine pitch + gain follow throttle/speed; wind gain follows speed.
-  a.update = function (throttle, speed, maxSpeed) {
-    if (!a.ctx) return;
-    const t = a.ctx.currentTime;
-    const frac = speed / maxSpeed;
-    a.engineOsc.frequency.setTargetAtTime(70 + throttle * 60 + frac * 40, t, 0.1);
-    a.engineGain.gain.setTargetAtTime(0.05 + throttle * 0.06 + frac * 0.03, t, 0.1);
-    const windTarget = speed < 20 ? 0 : 0.08 * ((speed - 20) / (maxSpeed - 20));
-    a.windGain.gain.setTargetAtTime(Math.max(0, windTarget), t, 0.15);
-  };
-
-  function blip(freq, dur, when, type, gainVal) {
-    if (!a.ctx) return;
-    const o = a.ctx.createOscillator();
+  function tone(freq, dur, type, vol, when = 0) {
+    if (!ctx || muted) return;
+    const t0 = ctx.currentTime + when;
+    const o = ctx.createOscillator();
     o.type = type || 'sine';
     o.frequency.value = freq;
-    const g = a.ctx.createGain();
-    g.gain.setValueAtTime(0, a.ctx.currentTime + when);
-    g.gain.linearRampToValueAtTime(gainVal || 0.2, a.ctx.currentTime + when + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.001, a.ctx.currentTime + when + dur);
-    o.connect(g); g.connect(a.master);
-    o.start(a.ctx.currentTime + when);
-    o.stop(a.ctx.currentTime + when + dur + 0.05);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(vol || 0.25, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    o.connect(g);
+    g.connect(master);
+    o.start(t0);
+    o.stop(t0 + dur + 0.05);
   }
 
-  // Rising-pitch chime: base 660 Hz + 60 Hz x ringsFlown, two notes.
-  a.chime = function (ringsFlown) {
-    if (!a.ctx) return;
-    const base = 660 + 60 * ringsFlown;
-    blip(base, 0.35, 0, 'sine', 0.22);
-    blip(base * 1.5, 0.5, 0.12, 'sine', 0.22);
+  return {
+    get muted() { return muted; },
+    get started() { return started; },
+    start,
+    toggleMute() {
+      muted = !muted;
+      if (master) master.gain.value = muted ? 0 : 0.5;
+      return muted;
+    },
+    update(state, dt) {
+      if (!ctx || !started) return;
+      const th = state.throttle;
+      const target = state.onGround ? 0.02 + th * 0.05 : 0.03 + th * 0.09;
+      engineGain.gain.setTargetAtTime(target, ctx.currentTime, 0.1);
+      const f = 55 + th * 90 + state.speed * 0.35;
+      engineOsc.frequency.setTargetAtTime(f, ctx.currentTime, 0.1);
+      engineOsc2.frequency.setTargetAtTime(f * 1.01 + 2, ctx.currentTime, 0.1);
+      engineFilter.frequency.setTargetAtTime(280 + th * 900, ctx.currentTime, 0.1);
+      const wind = state.onGround ? 0 : Math.min(0.22, (state.speed / 62) * 0.22);
+      windGain.gain.setTargetAtTime(wind, ctx.currentTime, 0.15);
+    },
+    ring(combo) {
+      if (!ctx) return;
+      const base = 523 * Math.pow(1.122, Math.min(combo - 1, 7));
+      tone(base, 0.35, 'sine', 0.3);
+      tone(base * 1.5, 0.4, 'sine', 0.22, 0.07);
+    },
+    crash() {
+      if (!ctx) return;
+      tone(70, 0.5, 'sine', 0.5);
+      tone(45, 0.7, 'triangle', 0.4, 0.05);
+    },
+    hardLanding() { if (ctx) tone(90, 0.3, 'sine', 0.35); },
+    chirp() {
+      if (!ctx) return;
+      tone(880, 0.15, 'sine', 0.25);
+      tone(1174, 0.2, 'sine', 0.25, 0.12);
+    },
+    canister() {
+      if (!ctx) return;
+      tone(660, 0.18, 'sine', 0.25);
+      tone(990, 0.25, 'sine', 0.22, 0.09);
+    },
+    takeoff() { if (ctx) tone(392, 0.3, 'sine', 0.2); },
   };
-
-  // Landing chirp: two short high blips.
-  a.chirp = function () {
-    if (!a.ctx) return;
-    blip(1320, 0.12, 0, 'sine', 0.18);
-    blip(1760, 0.16, 0.1, 'sine', 0.18);
-  };
-
-  // Crash thud.
-  a.thud = function () {
-    if (!a.ctx) return;
-    const o = a.ctx.createOscillator();
-    o.type = 'sine';
-    o.frequency.setValueAtTime(120, a.ctx.currentTime);
-    o.frequency.exponentialRampToValueAtTime(40, a.ctx.currentTime + 0.3);
-    const g = a.ctx.createGain();
-    g.gain.setValueAtTime(0.5, a.ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, a.ctx.currentTime + 0.35);
-    o.connect(g); g.connect(a.master);
-    o.start(); o.stop(a.ctx.currentTime + 0.4);
-  };
-
-  // Mission fanfare: rising arpeggio.
-  a.fanfare = function () {
-    if (!a.ctx) return;
-    const notes = [523.25, 659.25, 783.99, 1046.5];
-    notes.forEach((f, i) => blip(f, 0.4, i * 0.14, 'triangle', 0.2));
-  };
-
-  a.toggleMute = function () {
-    a.muted = !a.muted;
-    if (a.master) a.master.gain.value = a.muted ? 0 : 1;
-    return a.muted;
-  };
-
-  return a;
 }

@@ -1,138 +1,137 @@
-// hud.js — Trimmed HUD (spec §8): big SPD + ALT (left), fuel bar (left),
-// SCORE + RINGS n/8 + TIME (right). Damage = smoke + red vignette, no DMG number.
-// Guide arrow + distance, warnings, objective line, 150 px minimap.
-import { ISLANDS } from './terrain.js';
-import { fmtTime } from './missions.js';
+// hud.js — Island Hopper v3: HUD, spec §2.3 (display only).
+// Left: SPD + ALT + fuel. Right: SCORE / RINGS / TIME. Objective line top-centre.
+// Edge arrow + distance to next ring. Damage = smoke + red vignette, never a number.
 
-export function createHud(doc) {
-  const el = (id) => doc.getElementById(id);
-  const h = {
-    spd: el('hud-spd'), alt: el('hud-alt'), fuelFill: el('hud-fuel-fill'),
-    score: el('hud-score'), rings: el('hud-rings'), time: el('hud-time'),
-    objective: el('hud-objective'), guide: el('hud-guide-arrow'), guideDist: el('hud-guide-dist'),
-    warn: el('hud-warn'), vignette: el('hud-vignette'), mute: el('hud-mute'),
-    banner: el('hud-banner'), minimap: el('hud-minimap'),
-    bannerTimer: 0,
+import { RINGS } from './terrain.js';
+
+const THREE = window.THREE;
+
+export function createHud() {
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    spd: $('hud-spd'), alt: $('hud-alt'), fuelFill: $('hud-fuel-fill'), fuelText: $('hud-fuel-text'),
+    score: $('hud-score'), rings: $('hud-rings'), time: $('hud-time'),
+    objective: $('hud-objective'), arrow: $('hud-arrow'), ringDist: $('hud-ring-dist'),
+    popup: $('hud-popup'), banner: $('hud-banner'), vignette: $('hud-vignette'),
+    mute: $('hud-mute'), minimap: $('hud-minimap'), stall: $('hud-stall'),
   };
-  h.mapCtx = h.minimap ? h.minimap.getContext('2d') : null;
-  return h;
+  let bannerTimer = null;
+  let popupTimer = null;
+
+  function fmtTime(t) {
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  return {
+    showBanner(text, ms = 2600) {
+      if (!el.banner) return;
+      el.banner.textContent = text;
+      el.banner.classList.add('show');
+      clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => el.banner.classList.remove('show'), ms);
+    },
+    showPopup(text, ms = 1400) {
+      if (!el.popup) return;
+      el.popup.textContent = text;
+      el.popup.classList.add('show');
+      clearTimeout(popupTimer);
+      popupTimer = setTimeout(() => el.popup.classList.remove('show'), ms);
+    },
+    setMute(muted) {
+      if (el.mute) el.mute.textContent = muted ? 'M — SOUND OFF' : 'M — SOUND ON';
+    },
+    update(state, camera, screen) {
+      const inFlight = screen === 'FLYING' || screen === 'CRASHED' || screen === 'LANDED';
+      if (el.spd) el.spd.textContent = `${Math.round(state.speed * 3.6)}`;
+      if (el.alt) el.alt.textContent = `${Math.max(0, Math.round(state.pos.y))}`;
+      if (el.fuelFill) {
+        el.fuelFill.style.width = `${Math.max(0, state.fuel)}%`;
+        el.fuelFill.classList.toggle('low', state.fuel < 25);
+      }
+      if (el.fuelText) el.fuelText.textContent = `${Math.round(state.fuel)}%`;
+      if (el.score) el.score.textContent = String(state.score);
+      if (el.rings) el.rings.textContent = `${state.ringsFlown}/8`;
+      if (el.time) el.time.textContent = fmtTime(state.time);
+      if (el.stall) el.stall.style.display = state.stalled ? 'block' : 'none';
+
+      // Objective line
+      if (el.objective) {
+        if (state.ringsFlown >= 8) el.objective.textContent = 'Land on Karimbu to finish';
+        else {
+          const r = RINGS[state.ringsFlown];
+          el.objective.textContent = `Next: Ring ${state.ringsFlown + 1} — ${r.label}`;
+        }
+      }
+
+      // Edge arrow + distance to next ring
+      if (state.ringsFlown < 8 && el.arrow && camera) {
+        const r = RINGS[state.ringsFlown];
+        const d = Math.hypot(state.pos.x - r.x, state.pos.y - r.y, state.pos.z - r.z);
+        if (el.ringDist) el.ringDist.textContent = `${Math.round(d)} m`;
+        const v = new THREE.Vector3(r.x, r.y, r.z).project(camera);
+        const onScreen = v.z < 1 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1;
+        if (onScreen) {
+          el.arrow.style.display = 'none';
+        } else {
+          el.arrow.style.display = 'block';
+          const ang = Math.atan2(v.y, v.x);
+          const R = 42; // percent radius from centre
+          const cx = 50 + Math.cos(ang) * R;
+          const cy = 50 - Math.sin(ang) * R * 0.62;
+          el.arrow.style.left = `${cx}%`;
+          el.arrow.style.top = `${cy}%`;
+          el.arrow.style.transform = `translate(-50%, -50%) rotate(${(-ang * 180) / Math.PI}deg)`;
+        }
+      } else if (el.arrow) {
+        el.arrow.style.display = 'none';
+        if (el.ringDist) el.ringDist.textContent = '';
+      }
+
+      // Damage vignette (red, grows with damage; never a number)
+      if (el.vignette) el.vignette.style.opacity = String(state.damage * 0.22 + (state.crashed ? 0.3 : 0));
+
+      // Minimap: islands + runway + rings + plane heading
+      if (el.minimap && inFlight) drawMinimap(el.minimap, state);
+    },
+  };
 }
 
-export function showBanner(h, text, ms) {
-  if (!h.banner) return;
-  h.banner.textContent = text;
-  h.banner.classList.add('show');
-  h.bannerTimer = (ms || 1800) / 1000;
-}
-
-export function updateHud(h, state, rings, canisters, nextRing, dt) {
-  if (h.bannerTimer > 0) {
-    h.bannerTimer -= dt;
-    if (h.bannerTimer <= 0) h.banner.classList.remove('show');
-  }
-  if (h.spd) h.spd.textContent = Math.round(state.speed * 3.6) + ' km/h';
-  if (h.alt) h.alt.textContent = Math.round(state.pos.y) + ' m';
-  if (h.fuelFill) {
-    h.fuelFill.style.width = Math.max(0, state.fuel) + '%';
-    h.fuelFill.className = 'fill' + (state.fuel < 25 ? ' low' : '');
-  }
-  if (h.score) h.score.textContent = 'SCORE ' + state.score;
-  if (h.rings) h.rings.textContent = 'RINGS ' + state.ringsFlown + '/8';
-  if (h.time) h.time.textContent = 'TIME ' + fmtTime(state.time);
-
-  // Objective line
-  if (h.objective) {
-    if (state.ringsFlown >= 8) h.objective.textContent = 'Land on Karimbu to finish';
-    else if (nextRing) h.objective.textContent = 'Next: Ring ' + (state.ringsFlown + 1) + ' — ' + nextRing.def.label;
-    else h.objective.textContent = 'Fly through 8 rings in order, then land on Karimbu';
-  }
-
-  // Guide arrow + distance to next ring
-  if (nextRing && h.guide) {
-    const dx = nextRing.pos.x - state.pos.x;
-    const dz = nextRing.pos.z - state.pos.z;
-    const targetHeading = Math.atan2(dx, -dz);
-    let rel = targetHeading - state.heading;
-    while (rel > Math.PI) rel -= Math.PI * 2;
-    while (rel < -Math.PI) rel += Math.PI * 2;
-    // Arrow glyph ➤ points right (east); up = straight ahead, so offset -90°.
-    h.guide.style.transform = 'rotate(' + (rel * 180 / Math.PI - 90) + 'deg)';
-    h.guide.style.opacity = '1';
-    if (h.guideDist) {
-      const d = Math.hypot(dx, dz);
-      const dy = nextRing.pos.y - state.pos.y;
-      const arrow = dy > 8 ? ' ▲' : dy < -8 ? ' ▼' : '';
-      h.guideDist.textContent = Math.round(Math.hypot(d, dy)) + ' m' + arrow;
-    }
-  } else if (h.guide) {
-    h.guide.style.opacity = '0.25';
-    if (h.guideDist) h.guideDist.textContent = '';
-  }
-
-  // Warnings
-  let warn = '';
-  if (state.fuel <= 0) warn = 'FUEL EMPTY — GLIDING!';
-  else if (state.fuel < 20) warn = 'LOW FUEL';
-  else if (state.stallWarn) warn = 'STALL!';
-  else if (state.damage >= 2) warn = 'DAMAGE — FLY CAREFULLY';
-  if (h.warn) {
-    h.warn.textContent = warn;
-    h.warn.style.display = warn ? 'block' : 'none';
-  }
-
-  // Damage vignette (red screen edge, opacity scales with damage)
-  if (h.vignette) h.vignette.style.opacity = String(state.damage * 0.3);
-
-  drawMinimap(h, state, rings, canisters);
-}
-
-function drawMinimap(h, state, rings, canisters) {
-  const ctx = h.mapCtx;
-  if (!ctx) return;
-  const W = 150, S = W / 3000; // world radius 1500 -> 150 px
-  ctx.clearRect(0, 0, W, W);
-  ctx.fillStyle = 'rgba(10,30,50,0.75)';
-  ctx.fillRect(0, 0, W, W);
-  const px = (x) => W / 2 + x * S;
-  const pz = (z) => W / 2 + z * S;
+function drawMinimap(canvas, state) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(10, 30, 50, 0.55)';
+  ctx.beginPath(); ctx.arc(W / 2, H / 2, W / 2 - 2, 0, Math.PI * 2); ctx.fill();
+  const scale = W / 2600; // world ±1300 -> map
+  const px = (x) => W / 2 + x * scale;
+  const py = (z) => H / 2 + z * scale;
   // Islands
-  ctx.fillStyle = '#3f7d3f';
-  for (const isl of ISLANDS) {
-    ctx.beginPath();
-    ctx.arc(px(isl.x), pz(isl.z), Math.max(2, isl.r * S), 0, Math.PI * 2);
-    ctx.fill();
+  ctx.fillStyle = 'rgba(120, 200, 120, 0.8)';
+  const islands = [[0, 0, 280], [-620, -420, 150], [540, -560, 170], [720, 480, 120], [-540, 620, 90], [120, -980, 110]];
+  for (const [x, z, r] of islands) {
+    ctx.beginPath(); ctx.arc(px(x), py(z), Math.max(2, r * scale), 0, Math.PI * 2); ctx.fill();
   }
   // Runway
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(px(0), pz(60 - 110));
-  ctx.lineTo(px(0), pz(60 + 110));
-  ctx.stroke();
-  // Canisters
-  ctx.fillStyle = '#ffb020';
-  for (const c of canisters) {
-    if (c.taken) continue;
+  ctx.fillStyle = '#f5f5f5';
+  ctx.fillRect(px(-8), py(-50), 16 * scale + 1, 110 * scale);
+  // Rings
+  const rings = [[-180, -260], [-620, -420], [540, -560], [300, 120], [0, -320], [720, 480], [-540, 620], [120, -980]];
+  rings.forEach(([x, z], i) => {
     ctx.beginPath();
-    ctx.arc(px(c.pos.x), pz(c.pos.z), 3, 0, Math.PI * 2);
+    ctx.arc(px(x), py(z), 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = i < state.ringsFlown ? '#37d67a' : i === state.ringsFlown ? '#ffb300' : 'rgba(42,157,143,0.7)';
     ctx.fill();
-  }
-  // Rings: gold next / dim cyan / green flown
-  for (let i = 0; i < rings.length; i++) {
-    const r = rings[i];
-    ctx.fillStyle = r.passed ? '#22c55e' : i === state.ringsFlown ? '#ffd700' : '#1a7f8e';
-    ctx.beginPath();
-    ctx.arc(px(r.pos.x), pz(r.pos.z), i === state.ringsFlown ? 5 : 3.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // Plane triangle pointing along heading
-  const hx = Math.sin(state.heading), hz = -Math.cos(state.heading);
-  const cx = px(state.pos.x), cy = pz(state.pos.z);
+  });
+  // Plane: triangle pointing along heading (north = up, heading 0 = -Z)
+  const hx = -Math.sin(state.heading), hz = -Math.cos(state.heading);
+  const cx = px(state.pos.x), cy = py(state.pos.z);
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  ctx.moveTo(cx + hx * 7, cy + hz * 7);
-  ctx.lineTo(cx - hz * 4 - hx * 4, cy + hx * 4 - hz * 4);
-  ctx.lineTo(cx + hz * 4 - hx * 4, cy - hx * 4 - hz * 4);
+  ctx.moveTo(cx + hx * 8, cy + hz * 8);
+  ctx.lineTo(cx - hz * 5 - hx * 5, cy + hx * 5 - hz * 5);
+  ctx.lineTo(cx + hz * 5 - hx * 5, cy - hx * 5 - hz * 5);
   ctx.closePath();
   ctx.fill();
 }

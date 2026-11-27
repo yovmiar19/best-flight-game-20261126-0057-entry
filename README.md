@@ -1,50 +1,32 @@
-# Island Hopper — 3D Flight Game
+# Island Hopper
 
-[![Bounty](https://make.fun/badge/best-flight-game-20261126-0057.svg)](https://make.fun/bounty/best-flight-game-20261126-0057)
+[![Island Hopper](https://make.fun/badge/best-flight-game-20261126-0057.svg)](https://make.fun/bounty/best-flight-game-20261126-0057)
 [![Rank](https://make.fun/badge/best-flight-game-20261126-0057/yovmiar19/best-flight-game-20261126-0057-entry/rank.svg)](https://make.fun/bounty/best-flight-game-20261126-0057)
 [![Reward](https://make.fun/badge/best-flight-game-20261126-0057/yovmiar19/best-flight-game-20261126-0057-entry/reward.svg)](https://make.fun/bounty/best-flight-game-20261126-0057)
 
-Fly an **F-14D Tomcat** through 8 golden rings across a tropical archipelago at golden hour, then land on the Karimbu runway. Entry for the [best-flight-game-20261126-0057](https://make.fun/bounty/best-flight-game-20261126-0057) bounty ($500, top 50).
+Fly an F-14D Tomcat across a golden-hour island archipelago. Thread all 8 rings in order, grab fuel canisters, and butter the landing back on Karimbu runway.
 
 ## How to play
 
-- **Arrows** — pitch and bank (banking turns the plane)
-- **W/S** — throttle up / down
-- **R** — reset to the runway · **M** — mute · **Mouse drag** — look around
-- **Touch** — left stick to steer, right slider for throttle
-- **Gamepad** — left stick to steer, right trigger for throttle
+- **W / S** — throttle up / down
+- **↑ / ↓** — climb / dive (ArrowUp climbs — the v1 feel, restored in v3)
+- **← / →** — bank left / right
+- **Mouse drag** — look around · **R** — reset to runway · **M** — mute · **Enter** — continue
 
-You start in the air, already flying toward ring 1. Each ring pays **100 × combo** and refills **+15% fuel**. Grab the yellow fuel canisters (+45%). Land butter-smooth for **+500**, firm for **+200** — a hard landing damages the airframe. Three hits and you crash, but you respawn in the air with 2 seconds of invulnerability.
+Take off from the runway once you pass 18 m/s and pull up. Each ring pays **100 × ring number** (ring 1 = +100 … ring 8 = +800), with a combo multiplier. A smooth runway landing refuels and repairs the jet; three hard hits and you crash (+30 s penalty, fresh plane on the runway, score and rings kept).
 
-Finish all 8 rings and land to earn up to **3 stars** and a medal (GOLD ≥ 3200 with no damage, SILVER ≥ 2200, else BRONZE). Your best time is saved locally.
+## What's inside
 
-## The Tomcat
-
-A full F-14D model built from primitives: variable-sweep wings that swing from 20° extended at low speed to 68° swept at full throttle, twin canted tails, twin engines with afterburner glow and flame cones, bubble canopy, and landing gear. No propeller — this is a jet.
-
-## The world
-
-Six islands (Karimbu, Solmar, volcanic Bara, Nusa, Kecil, Terapung), a marked runway, animated sea with foam rings, 40 drifting low-poly clouds, volcano smoke, and golden-hour lighting with ACES tone mapping, a gradient sky dome, and soft shadows that follow the plane.
+- **F-14D Tomcat** with animated variable-sweep wings (spread at low speed, swept at high speed), twin canted tails, bubble canopy, twin engines with afterburner glow and flame, and damage smoke.
+- **Golden-hour world**: gradient sky dome, low warm sun with soft shadows, animated sea with shoreline foam, six islands (including the smoking Bara volcano), drifting low-poly clouds, and a lit runway on Karimbu.
+- **Trim HUD**: speed/altitude/fuel left, score/rings/time right, objective line, edge arrow + distance to the next ring, minimap, stall warning, and a red damage vignette.
+- **WebAudio**: engine + wind that follow throttle and speed, rising ring chimes per combo, crash thud, landing chirp, and a soft pad loop.
+- **Effects**: ring light beams, pulse + flash on pass, particle bursts, wind streaks at high speed, wingtip trails.
 
 ## Tech
 
-- Three.js r160 (vendored single-file build under `game/vendor/`)
-- Plain ES modules, no build step, no network requests — runs fully offline
-- WebAudio engine hum, wind noise, rising-pitch ring chimes, landing chirps, and a quiet music pad (all synthesized, no audio files)
+Plain static files — `game/index.html` plus ES modules under `game/src/`, Three.js vendored in `game/vendor/`. No network requests, no build step. Serve `game/` with any static server and open it in a desktop browser.
 
-## Run locally
+## Screenshots
 
-```sh
-python3 -m http.server 8000
-# open http://localhost:8000/game/
-```
-
-Build the dossier (what the judge reads):
-
-```sh
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-```
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+Staging shots (`?shot=title|ringpass|landing|results|beach|runway|ring|cover`) are built into the game for reproducible captures.
